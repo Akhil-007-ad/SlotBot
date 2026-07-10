@@ -28,7 +28,7 @@ const MessageBubble = ({ message }) => {
     <div style={{
       ...styles.messageRow,
       justifyContent: isUser ? 'flex-end' : 'flex-start'
-    }}>
+    }} className="message-row">
       {!isUser && (
         <div style={styles.botAvatar}>
           <span>🤖</span>
@@ -50,7 +50,7 @@ const MessageBubble = ({ message }) => {
           ? '0 4px 10px rgba(37, 99, 235, 0.15)'
           : 'none',
         color: isUser ? '#fff' : 'var(--text-primary)'
-      }}>
+      }} className="message-bubble">
         {message.isTyping ? (
           <div style={styles.typingIndicator}>
             <span style={styles.typingDot} className="typing-dot-1"></span>

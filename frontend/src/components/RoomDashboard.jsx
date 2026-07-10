@@ -30,7 +30,7 @@ const RoomDashboard = ({ bookings = [], onRoomSelect }) => {
   };
 
   return (
-    <div style={styles.dashboardContainer} className="glass-panel">
+    <div style={styles.dashboardContainer} className="glass-panel room-dashboard-container">
       <div style={styles.header}>
         <h2 style={styles.title}>🏢 Room Status Board</h2>
         <p style={styles.subtitle}>Real-time availability for today (July 9, 2026)</p>

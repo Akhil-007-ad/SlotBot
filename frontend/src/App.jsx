@@ -119,18 +119,18 @@ const App = () => {
   };
 
   return (
-    <div style={styles.appContainer}>
-      <header style={styles.appHeader} className="glass-panel">
-        <div style={styles.logoRow}>
+    <div style={styles.appContainer} className="app-shell">
+      <header style={styles.appHeader} className="glass-panel app-header">
+        <div style={styles.logoRow} className="app-title-row">
           <span style={styles.logoIcon}>⚡</span>
-          <h1 style={styles.logoTitle} className="text-gradient-cyan-blue">SlotBot Workspace</h1>
+          <h1 style={styles.logoTitle} className="text-gradient-cyan-blue app-title">SlotBot Workspace</h1>
         </div>
-        <span style={styles.statusIndicator}>● Active Session</span>
+        <span style={styles.statusIndicator} className="app-status-indicator">● Active Session</span>
       </header>
 
-      <main style={styles.mainLayout}>
+      <main style={styles.mainLayout} className="main-layout">
         {/* Chat Window Column */}
-        <div style={styles.chatCol}>
+        <div style={styles.chatCol} className="chat-column">
           <ChatWindow 
             messages={messages}
             isTyping={isTyping}
@@ -142,7 +142,7 @@ const App = () => {
         </div>
 
         {/* Dashboard Column */}
-        <div style={styles.dashboardCol}>
+        <div style={styles.dashboardCol} className="dashboard-column">
           <RoomDashboard 
             bookings={bookings}
             onRoomSelect={handleRoomSelect}
@@ -157,10 +157,9 @@ const styles = {
   appContainer: {
     display: 'flex',
     flexDirection: 'column',
-    height: '100vh',
-    maxHeight: '100vh',
-    width: '100vw',
-    overflow: 'hidden',
+    minHeight: '100dvh',
+    width: '100%',
+    overflowX: 'hidden',
     padding: '20px',
     backgroundColor: 'var(--bg-primary)'
   },
@@ -203,7 +202,7 @@ const styles = {
     display: 'flex',
     gap: '20px',
     flexGrow: 1,
-    height: 'calc(100vh - 100px)',
+    minHeight: 0,
     overflow: 'hidden'
   },
   chatCol: {

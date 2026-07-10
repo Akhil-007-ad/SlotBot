@@ -35,7 +35,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
   const showConfirmationCard = session?.step === 'AWAITING_CONFIRMATION' && session?.bookingData;
 
   return (
-    <div style={styles.chatContainer} className="glass-panel">
+    <div style={styles.chatContainer} className="glass-panel chat-window-shell">
       {/* Header */}
       <div style={styles.header}>
         <div style={styles.botProfile}>
@@ -48,7 +48,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
       </div>
 
       {/* Message List */}
-      <div style={styles.messagesList}>
+      <div style={styles.messagesList} className="messages-list">
         {messages.map(msg => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
@@ -72,7 +72,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
 
       {/* Quick Suggestions */}
       {!showConfirmationCard && (
-        <div style={styles.suggestionsRow}>
+        <div style={styles.suggestionsRow} className="suggestions-row">
           {QUICK_SUGGESTIONS.map((s, i) => (
             <button 
               key={i} 
@@ -96,9 +96,10 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
       )}
 
       {/* Input Form */}
-      <form onSubmit={handleSubmit} style={styles.inputForm}>
+      <form onSubmit={handleSubmit} style={styles.inputForm} className="chat-input-form">
         <input 
           type="text" 
+          className="chat-input-field"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           placeholder={showConfirmationCard ? "Please click Confirm/Cancel above..." : "Type your message here..."}
@@ -111,6 +112,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         />
         <button 
           type="submit" 
+          className="chat-send-btn"
           disabled={showConfirmationCard || !inputValue.trim()}
           style={{
             ...styles.sendBtn,

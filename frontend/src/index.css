@@ -54,6 +54,142 @@ body {
   min-height: 100vh;
 }
 
+.app-shell {
+  min-height: 100dvh;
+}
+
+.app-header {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.app-title-row {
+  min-width: 0;
+}
+
+.app-title {
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  line-height: 1.2;
+}
+
+.app-status-indicator {
+  white-space: nowrap;
+}
+
+.main-layout {
+  min-height: 0;
+}
+
+.chat-column,
+.dashboard-column {
+  min-width: 0;
+}
+
+.chat-window-shell {
+  min-height: 0;
+}
+
+.messages-list {
+  padding: 16px;
+}
+
+.message-row {
+  width: 100%;
+}
+
+.message-bubble {
+  max-width: min(78%, 460px);
+}
+
+.suggestions-row {
+  flex-wrap: wrap;
+}
+
+.chat-input-form {
+  align-items: center;
+}
+
+.chat-input-field {
+  min-width: 0;
+}
+
+.chat-send-btn {
+  min-width: 84px;
+}
+
+.room-dashboard-container .card-header {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.room-dashboard-container .booking-slot {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .main-layout {
+    flex-direction: column;
+    height: auto;
+    overflow: visible;
+  }
+
+  .chat-column,
+  .dashboard-column {
+    width: 100%;
+  }
+
+  .chat-window-shell,
+  .room-dashboard-container {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    padding: 10px;
+  }
+
+  .app-header {
+    padding: 12px 14px;
+    align-items: flex-start;
+  }
+
+  .app-title-row {
+    width: 100%;
+  }
+
+  .messages-list {
+    padding: 12px;
+  }
+
+  .message-bubble {
+    max-width: 100%;
+  }
+
+  .suggestions-row {
+    padding: 10px 12px;
+  }
+
+  .chat-input-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-send-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .room-dashboard-container {
+    padding: 16px;
+  }
+}
+
 /* Professional Card & Panels */
 .glass-panel {
   background: var(--panel-bg);
