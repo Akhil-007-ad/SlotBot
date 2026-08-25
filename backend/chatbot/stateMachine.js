@@ -1,838 +1,735 @@
 import {
-  createBooking,
-  findOverlappingBooking
-} from '../services/bookingService.js';
-
-import {
-  checkRoomAvailability,
-  createRoomBookingEvent,
-  isMS365Enabled
-} from '../services/graphService.js';
-
-import { getChatRooms } from '../services/roomService.js';
-
-import {
-  createBookingSession,
-  emptyBookingState,
-  mergeBookingState,
-  missingSearchFields
+  getMissingSearchField
 } from './bookingSession.js';
 
-import {
-  extractBookingDetails,
-  toLocalDateTime
-} from './extraction.js';
+export function debugSession(session, label = '') {
+    console.log('\n========================================');
+    console.log(`SLOTBOT DEBUG ${label}`);
+    console.log('========================================');
+
+    console.log('STEP:', session?.step);
+    console.log('EXPECTED FIELD:', session?.expectedField);
+
+    console.log(
+        'SESSION:',
+        JSON.stringify(session, null, 2)
+    );
+
+    console.log('========================================\n');
+}
+export function changeState(session, newStep, reason = '') {
+    const oldStep = session.step;
+
+    console.log('\n[STEP CHANGE]');
+    console.log('FROM   :', oldStep);
+    console.log('TO     :', newStep);
+    console.log('REASON :', reason);
+    console.log('');
+
+    session.step = newStep;
+}
+/* ============================================================
+   STATES
+============================================================ */
 
 
-export const fetchRooms = getChatRooms;
 
+export const STATES = Object.freeze({
 
-/**
- * Returns today's date in YYYY-MM-DD format.
- */
-const getToday = () => {
-  const now = new Date();
+  COLLECTING_DETAILS:
+    'COLLECTING_DETAILS',
 
-  return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0')
-  ].join('-');
-};
+  AWAITING_ROOM_SELECTION:
+    'AWAITING_ROOM_SELECTION',
 
+  AWAITING_PARTICIPANTS:
+    'AWAITING_PARTICIPANTS',
 
-/**
- * Formats a HH:mm time for chat display.
- */
-const formatTime = value => {
-  if (!value) return '';
+  AWAITING_SUBJECT:
+    'AWAITING_SUBJECT',
 
-  return new Date(`2000-01-01T${value}`)
-    .toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true
-    });
-};
+  AWAITING_DESCRIPTION:
+    'AWAITING_DESCRIPTION',
 
+  AWAITING_FINAL_CONFIRMATION:
+    'AWAITING_FINAL_CONFIRMATION',
 
-/**
- * Converts a room database object into the DTO expected by the frontend.
- */
-const roomDto = room => ({
-  id: room.id || room._id?.toString() || room.name,
-  name: room.name,
-  capacity: room.capacity,
-  hasTv: Boolean(room.tvAvailability),
-  location: [room.floor, room.location]
-    .filter(Boolean)
-    .join(' · ')
+  AWAITING_CONFLICT_DECISION:
+    'AWAITING_CONFLICT_DECISION',
+
+  BOOKING:
+    'BOOKING',
+
+  COMPLETED:
+    'COMPLETED',
+
+  CANCELLED:
+    'CANCELLED'
 });
 
 
-/**
- * Creates a completely fresh booking session.
- *
- * The booking date is always today because SlotBot
- * supports only future bookings for the current day.
- */
-const resetSession = () => {
-  const bookingData = emptyBookingState();
+/* ============================================================
+   EXPECTED FIELDS
+============================================================ */
 
-  bookingData.date = getToday();
+export const EXPECTED_FIELDS = Object.freeze({
+
+  ATTENDEE_COUNT:
+    'attendeeCount',
+
+  START_TIME:
+    'startTime',
+
+  END_TIME:
+    'endTime',
+
+  TV_REQUIRED:
+    'tvRequired',
+
+  ROOM:
+    'selectedRoomId',
+
+  PARTICIPANTS:
+    'participants',
+
+  SUBJECT:
+    'subject',
+
+  DESCRIPTION:
+    'description',
+
+  CONFIRMATION:
+    'confirmation',
+
+  CONFLICT_DECISION:
+    'conflictDecision'
+});
+
+
+/* ============================================================
+   SEARCH-DETAIL TRANSITIONS
+============================================================ */
+
+/**
+ * Determines the next piece of information required
+ * before room search can happen.
+ */
+export const getNextSearchRequirement = state => {
+
+  const missing =
+    getMissingSearchField(state);
+
+  if (!missing) {
+    return null;
+  }
 
   return {
-    step: 'COLLECTING_DETAILS',
-    bookingData
+    field:
+      missing.field,
+
+    question:
+      missing.question
   };
 };
 
 
-/**
- * Ensures that a restored/old session also uses today's date.
- */
-const ensureTodaySession = session => {
-  const nextSession = createBookingSession(session);
-  const today = getToday();
-
-  if (!nextSession.bookingData) {
-    nextSession.bookingData = emptyBookingState();
-  }
-
-  nextSession.bookingData.date = today;
-
-  return nextSession;
-};
-
+/* ============================================================
+   ROOM SEARCH
+============================================================ */
 
 /**
- * Searches rooms based on:
- * - attendee capacity
- * - TV requirement
- * - booking duration rules
- * - existing booking conflicts
+ * Once all room-search requirements are available,
+ * the bot must search for rooms rather than ask another
+ * question.
  */
-const searchRooms = async (rooms, state, findOverlap) => {
-  const start = toLocalDateTime(
-    state.date,
-    state.startTime
-  );
+export const shouldSearchRooms = state => {
 
-  const end = toLocalDateTime(
-    state.date,
-    state.endTime
-  );
-
-  const durationHours = (end - start) / 36e5;
-
-  const availableRooms = [];
-
-  for (const room of rooms) {
-    /*
-     * Capacity check.
-     */
-    if (room.capacity < state.attendeeCount) {
-      continue;
-    }
-
-    /*
-     * TV requirement check.
-     *
-     * If the user requires a TV, rooms without a TV
-     * are excluded.
-     */
-    if (
-      state.tvRequired === true &&
-      !room.tvAvailability
-    ) {
-      continue;
-    }
-
-    /*
-     * Booking duration validation.
-     */
-    if (
-      room.minBookingHours != null &&
-      durationHours < room.minBookingHours
-    ) {
-      continue;
-    }
-
-    if (
-      room.maxBookingHours != null &&
-      durationHours > room.maxBookingHours
-    ) {
-      continue;
-    }
-
-    /*
-     * Prevent room double-booking.
-     */
-    const overlaps = await findOverlap(
-      room.name,
-      start,
-      end
-    );
-
-    if (overlaps) {
-      continue;
-    }
-
-    availableRooms.push(room);
-  }
-
-  return availableRooms;
-};
-
-
-/**
- * Determines whether the user message contains
- * actual booking information.
- *
- * This prevents messages such as:
- *
- * "Actually make it for 10 people"
- *
- * from being incorrectly saved as the meeting subject
- * or description while those fields are being collected.
- */
-const hasBookingChanges = extracted => {
   return (
-    extracted.attendeeCount !== undefined ||
-    extracted.date !== undefined ||
-    extracted.startTime !== undefined ||
-    extracted.endTime !== undefined ||
-    extracted.tvRequired !== undefined ||
-    extracted.selectedRoomId !== undefined
+    state.attendeeCount !== null &&
+    state.attendeeCount !== undefined &&
+
+    state.startTime !== null &&
+    state.startTime !== undefined &&
+
+    state.endTime !== null &&
+    state.endTime !== undefined &&
+
+    state.tvRequired !== null &&
+    state.tvRequired !== undefined
   );
 };
 
 
-/**
- * Checks whether a time is strictly in the future today.
- */
-const isFutureTodayTime = (date, time) => {
-  if (!date || !time) {
-    return false;
-  }
+/* ============================================================
+   PARTICIPANTS
+============================================================ */
 
-  const dateTime = toLocalDateTime(date, time);
+export const shouldAskParticipants = state => {
 
-  if (!dateTime) {
-    return false;
-  }
-
-  return dateTime.getTime() > Date.now();
+  return (
+    shouldSearchRooms(state) &&
+    Boolean(state.selectedRoomId) &&
+    (!state.participantsCollected)
+  );
 };
 
 
+/* ============================================================
+   SUBJECT
+============================================================ */
+
+export const shouldAskSubject = state => {
+
+  return (
+    Boolean(state.selectedRoomId) &&
+    state.participantsCollected === true &&
+    (
+      !state.subject ||
+      !state.subject.trim()
+    )
+  );
+};
+
+
+export const shouldAskDescription = state => {
+
+  return (
+    Boolean(state.selectedRoomId) &&
+    state.participantsCollected === true &&
+    Boolean(
+      state.subject &&
+      state.subject.trim()
+    ) &&
+    (
+      state.description === null ||
+      state.description === undefined
+    )
+  );
+};
+
+
+/* ============================================================
+   FINAL CONFIRMATION
+============================================================ */
+
+export const shouldAskFinalConfirmation = state => {
+
+  return (
+    Boolean(state.selectedRoomId) &&
+
+    state.participantsCollected === true &&
+
+    Boolean(
+      state.subject &&
+      state.subject.trim()
+    ) &&
+
+    state.description !== null &&
+    state.description !== undefined
+  );
+};
+
+
+/* ============================================================
+   CONFLICT DECISION
+============================================================ */
+
+export const shouldAskConflictDecision = state => {
+
+  return (
+    Array.isArray(state.conflicts) &&
+    state.conflicts.length > 0
+  );
+};
+
+
+/* ============================================================
+   NEXT STATE
+============================================================ */
+
 /**
- * Creates the main SlotBot chat handler.
+ * Central decision function.
+ *
+ * This function DOES NOT perform database operations
+ * or Microsoft Graph calls.
+ *
+ * It only decides what the conversation should do next.
  */
-export const createChatHandler = ({
-  getRooms = fetchRooms,
-  findOverlap = findOverlappingBooking,
-  saveBooking = createBooking,
-  isCalendarEnabled = isMS365Enabled,
-  checkCalendar = checkRoomAvailability,
-  createCalendarEvent = createRoomBookingEvent
-} = {}) => async (message, session, user) => {
+export const determineNextState = ({
+  state,
+  roomsAvailable = true
+}) => {
 
-  /*
-   * Always work with today's booking date.
-   */
-  const nextSession = ensureTodaySession(session);
+  /* ----------------------------------------------------------
+     1. SEARCH INFORMATION
+  ---------------------------------------------------------- */
 
-  const cleanMessage = message?.trim() || '';
-  const lower = cleanMessage.toLowerCase();
+  const missing =
+    getNextSearchRequirement(state);
 
-  const today = getToday();
+  if (missing) {
 
-
-  // ============================================================
-  // 1. GLOBAL CANCEL / RESET ACTIONS
-  // ============================================================
-
-  if (/^(cancel|reset|restart|start over)$/i.test(lower)) {
     return {
-      reply:
-        'Booking process cancelled. Start a new request whenever you are ready.',
-      session: resetSession()
+      step:
+        STATES.COLLECTING_DETAILS,
+
+      expectedField:
+        missing.field,
+
+      question:
+        missing.question,
+
+      action:
+        'ASK_QUESTION'
     };
   }
 
 
-  // ============================================================
-  // 2. LOAD ROOMS
-  // ============================================================
+  /* ----------------------------------------------------------
+     2. NO ROOMS
+  ---------------------------------------------------------- */
 
-  const rooms = await getRooms(user);
-
-
-  // ============================================================
-  // 3. EXTRACT ALL AVAILABLE INFORMATION FROM EVERY MESSAGE
-  //
-  // This happens regardless of the current conversation step.
-  // ============================================================
-
-  const extracted = extractBookingDetails(
-    cleanMessage,
-    rooms,
-    nextSession.bookingData
-  );
-
-
-  /*
-   * If the user explicitly says there are no participants,
-   * normalize that to an empty array.
-   */
-  if (/^(none|only me|just me)$/i.test(lower)) {
-    extracted.participants = [];
-  }
-
-
-  /*
-   * Check whether this message contains actual booking changes
-   * before using the entire message as a subject or description.
-   */
-  const bookingChanged = hasBookingChanges(extracted);
-
-
-  // ============================================================
-  // 4. HANDLE SUBJECT INPUT SAFELY
-  // ============================================================
-
-  if (
-    nextSession.step === 'AWAITING_SUBJECT' &&
-    extracted.subject === undefined &&
-    !bookingChanged &&
-    cleanMessage
-  ) {
-    extracted.subject = cleanMessage;
-  }
-
-
-  // ============================================================
-  // 5. HANDLE DESCRIPTION INPUT SAFELY
-  // ============================================================
-
-  if (
-    nextSession.step === 'AWAITING_DESCRIPTION' &&
-    extracted.description === undefined &&
-    !bookingChanged &&
-    cleanMessage
-  ) {
-    extracted.description =
-      /^(none|no description)$/i.test(lower)
-        ? ''
-        : cleanMessage;
-  }
-
-
-  // ============================================================
-  // 6. MERGE EXTRACTED INFORMATION INTO BOOKING STATE
-  //
-  // This is the core of dynamic slot filling.
-  // ============================================================
-
-  nextSession.bookingData = mergeBookingState(
-    nextSession.bookingData,
-    extracted
-  );
-
-  const state = nextSession.bookingData;
-
-
-  // ============================================================
-  // 7. ENFORCE TODAY-ONLY BOOKINGS
-  // ============================================================
-
-  /*
-   * If the user explicitly requested another date,
-   * do not silently book that time today.
-   *
-   * Inform the user that SlotBot only supports today's
-   * remaining time slots.
-   */
-  if (
-    extracted.date &&
-    extracted.date !== today
-  ) {
-    state.date = today;
+  if (!roomsAvailable) {
 
     return {
-      reply:
-        '⚠️ SlotBot currently supports bookings only for the remaining time slots today. Please provide a future time for today.',
-      session: nextSession
+      step:
+        STATES.COLLECTING_DETAILS,
+
+      expectedField:
+        EXPECTED_FIELDS.START_TIME,
+
+      action:
+        'NO_ROOMS'
     };
   }
 
 
-  /*
-   * Date is always today internally.
-   */
-  state.date = today;
-
-
-  // ============================================================
-  // 8. EXPLICIT CONFIRMATION
-  //
-  // Confirmation is handled after extraction and merge.
-  // ============================================================
+  /* ----------------------------------------------------------
+     3. ROOM SELECTION
+  ---------------------------------------------------------- */
 
   if (
-    nextSession.step === 'AWAITING_CONFIRMATION' &&
-    /^(confirm|yes|approve)$/i.test(lower)
+    !state.selectedRoomId
   ) {
-    const room = rooms.find(
-      item =>
-        item.id === state.selectedRoomId ||
-        item._id?.toString() === state.selectedRoomId ||
-        item.name === state.selectedRoomId
-    );
-
-    const startTime = toLocalDateTime(
-      state.date,
-      state.startTime
-    );
-
-    const endTime = toLocalDateTime(
-      state.date,
-      state.endTime
-    );
-
-
-    /*
-     * Final validation before booking.
-     */
-    if (!room || !startTime || !endTime) {
-      nextSession.step = 'COLLECTING_DETAILS';
-
-      return {
-        reply:
-          'Some booking information is missing. Please provide the meeting timing again.',
-        session: nextSession
-      };
-    }
-
-
-    /*
-     * Start time must still be in the future at confirmation time.
-     */
-    if (startTime.getTime() <= Date.now()) {
-      nextSession.step = 'COLLECTING_DETAILS';
-      state.startTime = null;
-      state.endTime = null;
-      state.selectedRoomId = null;
-
-      return {
-        reply:
-          '⚠️ That meeting time has already started or passed. Please choose a future time today.',
-        session: nextSession
-      };
-    }
-
-
-    /*
-     * End must be after start.
-     */
-    if (endTime <= startTime) {
-      nextSession.step = 'COLLECTING_DETAILS';
-      state.endTime = null;
-      state.selectedRoomId = null;
-
-      return {
-        reply:
-          'The end time must be after the start time. What time should the meeting end?',
-        session: nextSession
-      };
-    }
-
-
-    /*
-     * Final database overlap check.
-     * A room must never be double-booked.
-     */
-    if (
-      await findOverlap(
-        room.name,
-        startTime,
-        endTime
-      )
-    ) {
-      nextSession.step = 'AWAITING_ROOM_SELECTION';
-      state.selectedRoomId = null;
-
-      return {
-        reply:
-          `❌ **${room.name}** was just booked for that time. Please select another available room.`,
-        session: nextSession
-      };
-    }
-
-
-    /*
-     * Final Microsoft 365 availability check.
-     */
-    if (
-      isCalendarEnabled() &&
-      room.outlookEmail
-    ) {
-      const free = await checkCalendar(
-        room.outlookEmail,
-        startTime,
-        endTime,
-        user?.accessToken
-      );
-
-      if (!free) {
-        nextSession.step = 'AWAITING_ROOM_SELECTION';
-        state.selectedRoomId = null;
-
-        return {
-          reply:
-            `❌ **${room.name}** is no longer available during that time. Please select another room.`,
-          session: nextSession
-        };
-      }
-    }
-
-
-    // ==========================================================
-    // CREATE DATABASE BOOKING
-    // ==========================================================
-
-    const booking = await saveBooking(
-      {
-        roomName: room.name,
-        peopleCount: state.attendeeCount,
-        startTime,
-        endTime,
-        date: toLocalDateTime(today, '00:00'),
-        teammates: state.participants,
-        subject: state.subject,
-        description: state.description
-      },
-      user
-    );
-
-
-    // ==========================================================
-    // CREATE MICROSOFT 365 EVENT
-    // ==========================================================
-
-    let teamsLink = null;
-
-    if (
-      isCalendarEnabled() &&
-      room.outlookEmail &&
-      user?.accessToken
-    ) {
-      try {
-        const graphResult =
-          await createCalendarEvent({
-            userAccessToken: user.accessToken,
-            roomName: room.name,
-            outlookEmail: room.outlookEmail,
-            startTime,
-            endTime,
-            peopleCount: state.attendeeCount,
-            teammates: state.participants,
-            meetingTitle: state.subject,
-            description: state.description
-          });
-
-        booking.outlookEventId =
-          graphResult.outlookEventId;
-
-        booking.teamsLink =
-          graphResult.teamsLink;
-
-        await booking.save();
-
-        teamsLink = graphResult.teamsLink;
-
-      } catch (error) {
-        console.error(
-          'Microsoft 365 sync failed:',
-          error.message
-        );
-      }
-    }
-
 
     return {
-      reply:
-        `🎉 **Success!** **${room.name}** is booked today from **${formatTime(state.startTime)}** to **${formatTime(state.endTime)}**.`,
-      session: resetSession(),
-      bookingConfirmed: true,
-      teamsLink
+      step:
+        STATES.AWAITING_ROOM_SELECTION,
+
+      expectedField:
+        EXPECTED_FIELDS.ROOM,
+
+      action:
+        'SHOW_ROOMS'
     };
   }
 
 
-  // ============================================================
-  // 9. EXPLICIT CANCELLATION AT CONFIRMATION
-  // ============================================================
+  /* ----------------------------------------------------------
+     4. PARTICIPANTS
+  ---------------------------------------------------------- */
 
   if (
-    nextSession.step === 'AWAITING_CONFIRMATION' &&
-    /^(cancel|no)$/i.test(lower)
+  !state.participantsCollected
+) {
+
+  return {
+    step:
+      STATES.AWAITING_PARTICIPANTS,
+
+    expectedField:
+      EXPECTED_FIELDS.PARTICIPANTS,
+
+    action:
+      'ASK_PARTICIPANTS'
+  };
+}
+
+
+  /* ----------------------------------------------------------
+     5. SUBJECT
+  ---------------------------------------------------------- */
+
+  if (
+    !state.subject ||
+    !state.subject.trim()
   ) {
+
     return {
-      reply: 'Booking cancelled.',
-      session: resetSession()
+      step:
+        STATES.AWAITING_SUBJECT,
+
+      expectedField:
+        EXPECTED_FIELDS.SUBJECT,
+
+      action:
+        'ASK_SUBJECT'
     };
   }
 
 
-  // ============================================================
-  // 10. VALIDATE ATTENDEE COUNT
-  // ============================================================
+  /* ----------------------------------------------------------
+     6. DESCRIPTION
+  ---------------------------------------------------------- */
+
+  if (
+    state.description === null ||
+    state.description === undefined
+  ) {
+
+    return {
+      step:
+        STATES.AWAITING_DESCRIPTION,
+
+      expectedField:
+        EXPECTED_FIELDS.DESCRIPTION,
+
+      action:
+        'ASK_DESCRIPTION'
+    };
+  }
+
+
+  /* ----------------------------------------------------------
+     7. CONFLICTS
+  ---------------------------------------------------------- */
+
+  if (
+    Array.isArray(state.conflicts) &&
+    state.conflicts.length > 0
+  ) {
+
+    return {
+      step:
+        STATES.AWAITING_CONFLICT_DECISION,
+
+      expectedField:
+        EXPECTED_FIELDS.CONFLICT_DECISION,
+
+      action:
+        'SHOW_CONFLICT_OPTIONS'
+    };
+  }
+
+
+  /* ----------------------------------------------------------
+     8. FINAL CONFIRMATION
+  ---------------------------------------------------------- */
+
+  return {
+    step:
+      STATES.AWAITING_FINAL_CONFIRMATION,
+
+    expectedField:
+      EXPECTED_FIELDS.CONFIRMATION,
+
+    action:
+      'ASK_CONFIRMATION'
+  };
+};
+
+
+/* ============================================================
+   CONFLICT DECISIONS
+============================================================ */
+
+export const CONFLICT_ACTIONS = Object.freeze({
+
+  CONFIRM_SUGGESTION:
+    'CONFIRM_SUGGESTION',
+
+  FORCE_BOOK:
+    'FORCE_BOOK',
+
+  CANCEL:
+    'CANCEL'
+});
+
+
+export const parseConflictDecision = message => {
+
+  const value =
+    String(message || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[.!?,]/g, '')
+      .replace(/\s+/g, ' ');
+
+
+  /* ----------------------------------------------------------
+     OPTION 1
+  ---------------------------------------------------------- */
+
+  if (
+    /^(1|one)$/.test(value) ||
+    /\b(confirm suggestion|confirm the suggestion|use suggestion|use the suggestion|use suggested time|use the suggested time|suggested slot|suggested time|book suggested)\b/i.test(value)
+  ) {
+
+    return CONFLICT_ACTIONS.CONFIRM_SUGGESTION;
+  }
+
+
+  /* ----------------------------------------------------------
+     OPTION 2
+  ---------------------------------------------------------- */
+
+  if (
+    /^(2|two)$/.test(value) ||
+    /\b(force|force book|force booking|book anyway|book it anyway|book despite|ignore conflict|ignore conflicts|book regardless|book even though)\b/i.test(value)
+  ) {
+
+    return CONFLICT_ACTIONS.FORCE_BOOK;
+  }
+
+
+  /* ----------------------------------------------------------
+     OPTION 3
+  ---------------------------------------------------------- */
+
+  if (
+    /^(3|three)$/.test(value) ||
+    /\b( cancel|cancel booking|don't book|do not book|stop)\b/i.test(value)
+  ) {
+
+    return CONFLICT_ACTIONS.CANCEL;
+  }
+
+
+  return null;
+};
+
+
+/* ============================================================
+   CONFIRMATION
+============================================================ */
+
+export const parseConfirmation = message => {
+
+  const value =
+    String(message || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[.!?,]/g, '')
+      .replace(/\s+/g, ' ');
+
+
+  /* ----------------------------------------------------------
+     YES
+  ---------------------------------------------------------- */
+
+  if (
+    /^(yes|y|yeah|yea|yaa|yep|yup|sure|ok|okay|alright|confirm|confirmed|approve|approved)$/
+      .test(value)
+  ) {
+    return true;
+  }
+
+
+  if (
+    /\b(yes|yeah|yea|yaa|yep|yup|sure|go ahead|confirm|approve|book it|do it)\b/i.test(value)
+  ) {
+    return true;
+  }
+
+
+  /* ----------------------------------------------------------
+     NO
+  ---------------------------------------------------------- */
+
+  if (
+    /^(no|n|nope|nah|cancel|none)$/
+      .test(value)
+  ) {
+    return false;
+  }
+
+
+  if (/\b(no|nope|nah|cancel|don't book|do not book)\b/i.test(value)) {
+    return false;
+  }
+
+
+  return null;
+};
+
+
+/* ============================================================
+   GENERIC STATE VALIDATION
+============================================================ */
+
+export const validateState = state => {
+
+  const errors = [];
+
 
   if (
     state.attendeeCount !== null &&
-    state.attendeeCount !== undefined &&
     (
-      !Number.isInteger(state.attendeeCount) ||
+      !Number.isInteger(
+        state.attendeeCount
+      ) ||
       state.attendeeCount < 1
     )
   ) {
-    state.attendeeCount = null;
-    state.selectedRoomId = null;
 
-    return {
-      reply:
-        'Please provide an attendee count of at least 1.',
-      session: nextSession
-    };
+    errors.push({
+      field:
+        EXPECTED_FIELDS.ATTENDEE_COUNT,
+
+      message:
+        'Attendee count must be at least 1.'
+    });
   }
-
-
-  const maxCapacity = rooms.reduce(
-    (max, room) =>
-      Math.max(max, room.capacity || 0),
-    0
-  );
 
 
   if (
-    state.attendeeCount &&
-    state.attendeeCount > maxCapacity
+    !state.date
   ) {
-    state.attendeeCount = null;
-    state.selectedRoomId = null;
 
-    return {
-      reply:
-        `Our largest room seats ${maxCapacity}. How many people will attend?`,
-      session: nextSession
-    };
+    errors.push({
+      field:
+        'date',
+
+      message:
+        'Booking date is required.'
+    });
   }
 
-
-  // ============================================================
-  // 11. VALIDATE TIME ORDER
-  // ============================================================
 
   if (
-    state.startTime &&
-    state.endTime
+    state.tvRequired !== null &&
+    typeof state.tvRequired !== 'boolean'
   ) {
-    const start = toLocalDateTime(
-      today,
-      state.startTime
-    );
 
-    const end = toLocalDateTime(
-      today,
-      state.endTime
-    );
+    errors.push({
+      field:
+        EXPECTED_FIELDS.TV_REQUIRED,
 
-    if (end <= start) {
-      state.endTime = null;
-      state.selectedRoomId = null;
-
-      return {
-        reply:
-          'The end time must be after the start time. What time should the meeting end?',
-        session: nextSession
-      };
-    }
+      message:
+        'TV requirement must be yes or no.'
+    });
   }
 
 
-  // ============================================================
-  // 12. VALIDATE THAT START TIME IS IN THE FUTURE
-  //
-  // Only future bookings for TODAY are allowed.
-  // ============================================================
-
-  if (
-    state.startTime &&
-    !isFutureTodayTime(today, state.startTime)
-  ) {
-    state.startTime = null;
-    state.endTime = null;
-    state.selectedRoomId = null;
-
-    return {
-      reply:
-        '⚠️ Please choose a start time later than the current time. SlotBot only allows future bookings for today.',
-      session: nextSession
-    };
-  }
-
-
-  // ============================================================
-  // 13. CHECK FOR MISSING ROOM SEARCH FIELDS
-  //
-  // Date should not be requested because it is always today.
-  // ============================================================
-
-  const missing = missingSearchFields(state);
-
-  /*
-   * Safety filter in case missingSearchFields still includes date.
-   */
-  const actualMissing = missing.filter(
-    field =>
-      !/date|today/i.test(field)
-  );
-
-
-  if (actualMissing.length) {
-    nextSession.step = 'COLLECTING_DETAILS';
-
-    return {
-      reply: actualMissing[0],
-      session: nextSession
-    };
-  }
-
-
-  // ============================================================
-  // 14. SEARCH AVAILABLE ROOMS
-  // ============================================================
-
-  const availableRooms = await searchRooms(
-    rooms,
-    state,
-    findOverlap
-  );
-
-
-  if (!availableRooms.length) {
-    /*
-     * Clear selection because the previous room may
-     * no longer satisfy the new search requirements.
-     */
-    state.selectedRoomId = null;
-    nextSession.step = 'COLLECTING_DETAILS';
-
-    return {
-      reply:
-        `No rooms are available today for **${state.attendeeCount} people** from **${formatTime(state.startTime)}** to **${formatTime(state.endTime)}**${state.tvRequired ? ' with a TV' : ''}. Try changing the time or requirements.`,
-      session: nextSession
-    };
-  }
-
-
-  // ============================================================
-  // 15. VALIDATE SELECTED ROOM
-  // ============================================================
-
-  const selectedRoom = availableRooms.find(
-    room =>
-      room.id === state.selectedRoomId ||
-      room._id?.toString() === state.selectedRoomId ||
-      room.name === state.selectedRoomId
-  );
-
-
-  /*
-   * No valid room selected yet.
-   *
-   * Return structured room objects so the frontend
-   * can render clickable cards.
-   */
-  if (!selectedRoom) {
-    /*
-     * Remove an old/invalid selection.
-     */
-    state.selectedRoomId = null;
-
-    nextSession.step = 'AWAITING_ROOM_SELECTION';
-
-    return {
-      reply:
-        'Please select one of the available rooms:',
-      session: nextSession,
-      roomsList: availableRooms.map(roomDto)
-    };
-  }
-
-
-  // ============================================================
-  // 16. COLLECT PARTICIPANTS
-  //
-  // Do not block extraction of future booking changes.
-  // ============================================================
-
-  if (state.participants === null) {
-    nextSession.step = 'AWAITING_PARTICIPANTS';
-
-    return {
-      reply:
-        'Who should receive the meeting invite? Enter teammate email addresses separated by commas, or type **none**.',
-      session: nextSession
-    };
-  }
-
-
-  // ============================================================
-  // 17. COLLECT MEETING SUBJECT
-  // ============================================================
-
-  if (!state.subject) {
-    nextSession.step = 'AWAITING_SUBJECT';
-
-    return {
-      reply:
-        'What should the meeting invitation title be? For example: `Sprint planning`.',
-      session: nextSession
-    };
-  }
-
-
-  // ============================================================
-  // 18. COLLECT DESCRIPTION
-  // ============================================================
-
-  if (state.description === null) {
-    nextSession.step = 'AWAITING_DESCRIPTION';
-
-    return {
-      reply:
-        'Please provide the meeting description or agenda. Type **none** to leave it blank.',
-      session: nextSession
-    };
-  }
-
-
-  // ============================================================
-  // 19. SHOW CONFIRMATION
-  // ============================================================
-
-  nextSession.step = 'AWAITING_CONFIRMATION';
-
-  return {
-    reply:
-      'Please review your booking details.',
-    session: nextSession,
-    showConfirmation: true
-  };
+  return errors;
 };
 
 
-export const handleChat = createChatHandler();
+/* ============================================================
+   STEP TRANSITION HELPERS
+============================================================ */
+
+export const transitionToCollecting =
+  (session, field, question) => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.COLLECTING_DETAILS;
+
+    session.expectedField =
+      field;
+
+    return {
+      ...session,
+
+      question
+    };
+  };
+
+
+export const transitionToRoomSelection =
+  session => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.AWAITING_ROOM_SELECTION;
+
+    session.expectedField =
+      EXPECTED_FIELDS.ROOM;
+
+    return session;
+  };
+
+
+export const transitionToParticipants =
+  session => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.AWAITING_PARTICIPANTS;
+
+    session.expectedField =
+      EXPECTED_FIELDS.PARTICIPANTS;
+
+    return session;
+  };
+
+
+export const transitionToSubject =
+  session => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.AWAITING_SUBJECT;
+
+    session.expectedField =
+      EXPECTED_FIELDS.SUBJECT;
+
+    return session;
+  };
+
+
+export const transitionToDescription =
+  session => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.AWAITING_DESCRIPTION;
+
+    session.expectedField =
+      EXPECTED_FIELDS.DESCRIPTION;
+
+    return session;
+  };
+
+
+export const transitionToConfirmation =
+  session => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.AWAITING_FINAL_CONFIRMATION;
+
+    session.expectedField =
+      EXPECTED_FIELDS.CONFIRMATION;
+
+    return session;
+  };
+
+
+export const transitionToConflictDecision =
+  session => {
+    console.log('\n[STATE TRANSITION]');
+    console.log('FROM:', session.step);
+    console.log('TO:', STATES.AWAITING_ROOM_SELECTION);
+    console.log('EXPECTED FIELD:', EXPECTED_FIELDS.ROOM);
+    session.step =
+      STATES.AWAITING_CONFLICT_DECISION;
+
+    session.expectedField =
+      EXPECTED_FIELDS.CONFLICT_DECISION;
+
+    return session;
+  };

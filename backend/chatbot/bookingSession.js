@@ -1,42 +1,214 @@
-const today = () => {
+const getToday = () => {
+
   const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  return [
+    now.getFullYear(),
+    String(
+      now.getMonth() + 1
+    ).padStart(2, '0'),
+    String(
+      now.getDate()
+    ).padStart(2, '0')
+  ].join('-');
 };
 
+
 export const emptyBookingState = () => ({
+
   attendeeCount: null,
-  // SlotBot only supports same-day bookings, so the date is always today.
-  date: today(),
+
+  date: getToday(),
+
   startTime: null,
+
   endTime: null,
+
   tvRequired: null,
+
   selectedRoomId: null,
+
   selectedRoomName: null,
+
+  /*
+   * null = not answered yet
+   * [] = user explicitly said none
+   * [emails] = user provided teammates
+   */
   participants: null,
+
+  participantsCollected: false,
+
   subject: null,
-  description: null
+
+  description: null,
+
+  /*
+   * Used later for teammate conflict handling.
+   */
+  conflicts: [],
+
+  suggestedSlot: null,
+
+  suggestedRoomId: null
+
 });
 
-export const createBookingSession = (session = {}) => ({
-  step: session.step || 'COLLECTING_DETAILS',
-  // A client can send null values for unfilled fields. Preserve the defaults
-  // (especially today's date) instead of overwriting them with null.
-  bookingData: mergeBookingState(emptyBookingState(), session.bookingData || {})
-});
 
-// Only defined extracted values replace the current state. This is the single
-// merge point for every incoming message.
-export const mergeBookingState = (state, extracted) => {
-  const merged = { ...state };
-  for (const [field, value] of Object.entries(extracted)) {
-    if (value !== undefined && value !== null) merged[field] = value;
+export const createBookingSession = (
+  session = {}
+) => {
+
+  const defaults =
+    emptyBookingState();
+
+  const incoming =
+    session.bookingData || {};
+
+  const bookingData = {
+    ...defaults,
+    ...incoming
+  };
+
+
+  /*
+   * Old sessions may contain participants: []
+   * without participantsCollected.
+   *
+   * Treat those as NOT answered.
+   */
+  if (
+    typeof incoming.participantsCollected !==
+    'boolean'
+  ) {
+
+    bookingData.participants = null;
+
+    bookingData.participantsCollected =
+      false;
   }
+
+
+  return {
+
+    step:
+      session.step ||
+      'COLLECTING_DETAILS',
+
+    expectedField:
+      session.expectedField ||
+      null,
+
+    bookingData
+
+  };
+};
+
+
+/**
+ * Merge extracted information into state.
+ */
+export const mergeBookingState = (
+  state,
+  extracted
+) => {
+
+  const merged = {
+    ...state
+  };
+
+
+  for (
+    const [field, value]
+    of Object.entries(extracted || {})
+  ) {
+
+    if (
+      value !== undefined &&
+      value !== null
+    ) {
+
+      merged[field] = value;
+    }
+  }
+
+
+  /*
+   * Participants are special.
+   *
+   * We only consider the question answered
+   * if extraction actually produced participants.
+   */
+  if (
+    Object.prototype.hasOwnProperty.call(
+      extracted || {},
+      'participants'
+    )
+  ) {
+
+    merged.participantsCollected =
+      true;
+  }
+
+
   return merged;
 };
 
-export const missingSearchFields = state => [
-  ['attendeeCount', 'How many people will be attending?'],
-  ['startTime', 'What time should the meeting start?'],
-  ['endTime', 'What time should the meeting end?'],
-  ['tvRequired', 'Do you need a TV/display? Please answer yes or no.']
-].filter(([field]) => state[field] === null).map(([, question]) => question);
+
+/**
+ * Returns the first missing search field.
+ */
+export const getMissingSearchField = state => {
+
+  const fields = [
+
+    {
+      field: 'attendeeCount',
+
+      question:
+        'How many people will be attending?'
+    },
+
+    {
+      field: 'startTime',
+
+      question:
+        'What time should the meeting start?'
+    },
+
+    {
+      field: 'endTime',
+
+      question:
+        'What time should the meeting end?'
+    },
+
+    {
+      field: 'tvRequired',
+
+      question:
+        'Do you need a TV/display? Please answer yes or no.'
+    }
+
+  ];
+
+
+  return (
+    fields.find(
+      item =>
+        state[item.field] === null ||
+        state[item.field] === undefined
+    ) || null
+  );
+};
+
+
+export const missingSearchFields = state => {
+
+  const missing =
+    getMissingSearchField(state);
+
+  return missing
+    ? [missing.question]
+    : [];
+};

@@ -1,11 +1,11 @@
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, jwtVerify,decodeProtectedHeader, decodeJwt } from 'jose';
 import '../config/env.js';
 
 const tenantId = process.env.ENTRA_TENANT_ID;
 const apiClientId = process.env.ENTRA_API_CLIENT_ID;
 
 const issuer = tenantId
-  ? `https://login.microsoftonline.com/${tenantId}/v2.0`
+  ? `https://sts.windows.net/${tenantId}/`
   : null;
 const jwks = tenantId
   ? createRemoteJWKSet(new URL(`https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`))
@@ -33,6 +33,14 @@ export const requireAuth = async (req, res, next) => {
 
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) return res.status(401).json({ error: 'A Microsoft Entra access token is required.' });
+
+  const header = decodeProtectedHeader(token);
+  const decoded = decodeJwt(token);
+
+  console.log('TOKEN HEADER:', header);
+  console.log('TOKEN ISSUER:', decoded.iss);
+  console.log('TOKEN AUDIENCE:', decoded.aud);
+  console.log('TOKEN VERSION:', decoded.ver);
 
   try {
     const { payload } = await jwtVerify(token, jwks, {
