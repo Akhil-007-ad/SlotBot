@@ -1,222 +1,137 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMsal } from '@azure/msal-react';
 import ChatWindow from './components/ChatWindow';
 import RoomDashboard from './components/RoomDashboard';
+import { loginRequest } from './authConfig';
 
-// Dynamically read environment variable for public cloud deployments, fallback to local backend port
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5001';
+const initialSession = { step: 'COLLECTING_DETAILS', bookingData: { attendeeCount: null, date: null, startTime: null, endTime: null, tvRequired: null, selectedRoomId: null, participants: [] } };
 
 const App = () => {
-  const [messages, setMessages] = useState([
-    {
-      id: 'welcome',
-      sender: 'bot',
-      text: "👋 Welcome to **SlotBot**! I can help you reserve a meeting room for **today**.\n\nType **\"book a room\"** or specify details like: *\"Book Quantum room for 4 people starting at 2:00 PM for 2 hours.\"*"
-    }
-  ]);
-  const [session, setSession] = useState({
-    step: 'AWAITING_BOOKING_INIT',
-    bookingData: {
-      roomName: null,
-      peopleCount: null,
-      durationHours: null,
-      startTimeStr: null
-    }
-  });
+  const { instance, accounts } = useMsal();
+  const devAuthEnabled = import.meta.env.VITE_DEV_AUTH === 'true';
+  const account = useMemo(() => accounts[0] || (devAuthEnabled ? { name: 'Local development user', username: '' } : null), [accounts, devAuthEnabled]);
+  const [messages, setMessages] = useState([{ id: 'welcome', sender: 'bot', text: 'Welcome to **SlotBot**. Tell me the attendees, time, TV need, room, or participants in any order.' }]);
+  const [session, setSession] = useState(initialSession);
   const [isTyping, setIsTyping] = useState(false);
   const [bookings, setBookings] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [error, setError] = useState('');
 
-  // Fetch all bookings for today
-  const fetchBookings = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/bookings`);
-      if (res.ok) {
-        const data = await res.json();
-        setBookings(data);
-      }
-    } catch (err) {
-      console.error("Failed to fetch today's bookings:", err);
+  const apiFetch = useCallback(async (path, options = {}) => {
+    const headers = new Headers(options.headers);
+    if (!devAuthEnabled) {
+      const token = await instance.acquireTokenSilent({ ...loginRequest, account });
+      headers.set('Authorization', `Bearer ${token.accessToken}`);
     }
-  };
+    return fetch(`${API_BASE}${path}`, { ...options, headers });
+  }, [account, devAuthEnabled, instance]);
 
-  // Poll for today's bookings every 10 seconds
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [roomsResponse, bookingsResponse] = await Promise.all([apiFetch('/api/rooms'), apiFetch('/api/bookings')]);
+      if (!roomsResponse.ok || !bookingsResponse.ok) throw new Error('Unable to load booking data.');
+      setRooms(await roomsResponse.json());
+      setBookings(await bookingsResponse.json());
+      setError('');
+    } catch (loadError) {
+      setError(loadError.message || 'Unable to load SlotBot data.');
+    }
+  }, [apiFetch]);
+
   useEffect(() => {
-    fetchBookings();
-    const interval = setInterval(fetchBookings, 10000);
+    if (!account) return;
+    loadDashboard();
+    const interval = setInterval(loadDashboard, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [account, loadDashboard]);
 
-  const handleSendMessage = async (text) => {
-    // 1. Add User Message
-    const userMsgId = Date.now().toString();
-    const newUserMessage = {
-      id: userMsgId,
-      sender: 'user',
-      text
-    };
-    
-    setMessages(prev => [...prev, newUserMessage]);
+  const handleSendMessage = async text => {
+    setMessages(previous => [...previous, { id: crypto.randomUUID(), sender: 'user', text }]);
     setIsTyping(true);
-
     try {
-      // 2. Call backend chat API
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session })
-      });
-
-      if (!res.ok) {
-        throw new Error('API server returned an error');
-      }
-
-      const data = await res.json();
-      
-      // 3. Update session state
+      const response = await apiFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, session }) });
+      if (!response.ok) throw new Error('The booking assistant could not process that request.');
+      const data = await response.json();
       setSession(data.session);
-
-      // Simulate typing delay for a premium experience
-      setTimeout(() => {
-        setIsTyping(false);
-        setMessages(prev => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            sender: 'bot',
-            text: data.reply
-          }
-        ]);
-
-        // If booking was confirmed or cancelled, refresh the dashboard
-        if (data.bookingConfirmed) {
-          fetchBookings();
-        }
-      }, 500);
-
-    } catch (err) {
-      setIsTyping(false);
-      setMessages(prev => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          sender: 'bot',
-          text: '⚠️ **Error**: Could not connect to the booking assistant. Please make sure the server is running.'
-        }
-      ]);
-    }
+      setMessages(previous => [...previous, {
+        id: crypto.randomUUID(),
+        sender: 'bot',
+        text: data.reply,
+        roomsList: data.roomsList,
+        showConflictOptions: data.showConflictOptions,
+        recommendedTimeStr: data.recommendedTimeStr,
+        conflictReason: data.conflictReason
+      }]);
+      if (data.bookingConfirmed) loadDashboard();
+    } catch (chatError) {
+      setMessages(previous => [...previous, { id: crypto.randomUUID(), sender: 'bot', text: `⚠️ **Error**: ${chatError.message}` }]);
+    } finally { setIsTyping(false); }
   };
 
-  const handleConfirmBooking = () => {
-    handleSendMessage('confirm');
-  };
-
-  const handleCancelBooking = () => {
-    handleSendMessage('cancel');
-  };
-
-  // When user clicks a room on the dashboard
-  const handleRoomSelect = (roomName) => {
-    handleSendMessage(`Book room ${roomName}`);
-  };
+  if (!account) return (
+    <main className="flex flex-col items-center justify-center min-h-screen gap-4 text-center p-8">
+      <h1 className="text-3xl font-bold text-violet-900">SlotBot</h1>
+      <p className="text-slate-600">Sign in with your company account to reserve a room.</p>
+      <button
+        onClick={() => instance.loginRedirect(loginRequest)}
+        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors cursor-pointer"
+      >
+        Sign in with Microsoft
+      </button>
+    </main>
+  );
 
   return (
-    <div style={styles.appContainer} className="app-shell">
-      <header style={styles.appHeader} className="glass-panel app-header">
-        <div style={styles.logoRow} className="app-title-row">
-          <span style={styles.logoIcon}>⚡</span>
-          <h1 style={styles.logoTitle} className="text-gradient-cyan-blue app-title">SlotBot Workspace</h1>
+    <div className="flex flex-col min-h-screen bg-slate-50 font-[Plus_Jakarta_Sans,sans-serif]">
+      {/* Header */}
+      <header className="flex w-full justify-between items-center bg-white/70 backdrop-blur-xl border-b border-slate-200 px-5 py-3 sticky top-0 z-10">
+        <div className="flex flex-col gap-0">
+          <h1 className="font-bold text-2xl text-violet-900">Welcome to SlotBot</h1>
+          <span className="text-sm text-slate-500 font-medium">
+            {devAuthEnabled ? 'Local development mode' : `Signed in as ${account.name || account.username}`}
+          </span>
         </div>
-        <span style={styles.statusIndicator} className="app-status-indicator">● Active Session</span>
+        {!devAuthEnabled && (
+          <button
+            onClick={() => instance.logoutRedirect({ account })}
+            className="text-sm text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+          >
+            Sign out
+          </button>
+        )}
       </header>
 
-      <main style={styles.mainLayout} className="main-layout">
-        {/* Chat Window Column */}
-        <div style={styles.chatCol} className="chat-column">
-          <ChatWindow 
+      {/* Error Banner */}
+      {error && (
+        <p className="mx-5 mt-3 px-4 py-2.5 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+          {error}
+        </p>
+      )}
+
+      {/* Main layout */}
+      <main className="flex gap-5 px-5 py-4 flex-1 min-h-0">
+        <div className="min-w-0 flex-1">
+          <ChatWindow
             messages={messages}
             isTyping={isTyping}
             onSendMessage={handleSendMessage}
             session={session}
-            onConfirmBooking={handleConfirmBooking}
-            onCancelBooking={handleCancelBooking}
+            onConfirmBooking={() => handleSendMessage('confirm')}
+            onCancelBooking={() => handleSendMessage('cancel')}
+            apiFetch={apiFetch}
           />
         </div>
-
-        {/* Dashboard Column */}
-        <div style={styles.dashboardCol} className="dashboard-column">
-          <RoomDashboard 
+        <div className="min-w-0 w-[30%] shrink-0">
+          <RoomDashboard
+            rooms={rooms}
             bookings={bookings}
-            onRoomSelect={handleRoomSelect}
+            onRoomSelect={roomName => handleSendMessage(`Book room ${roomName}`)}
           />
         </div>
       </main>
     </div>
   );
-};
-
-const styles = {
-  appContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    minHeight: '100dvh',
-    width: '100%',
-    overflowX: 'hidden',
-    padding: '20px',
-    backgroundColor: 'var(--bg-primary)'
-  },
-  appHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '20px',
-    padding: '12px 20px',
-    flexShrink: 0,
-    backgroundColor: '#ffffff',
-    border: '1px solid var(--panel-border)',
-    boxShadow: 'var(--card-shadow)'
-  },
-  logoRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px'
-  },
-  logoIcon: {
-    fontSize: '1.5rem',
-    textShadow: '0 0 10px rgba(37, 99, 235, 0.2)'
-  },
-  logoTitle: {
-    fontSize: '1.25rem',
-    fontWeight: '800',
-    letterSpacing: '-0.02em',
-    color: 'var(--accent-blue-dark)'
-  },
-  statusIndicator: {
-    fontSize: '0.75rem',
-    color: 'var(--success-text)',
-    backgroundColor: 'var(--success-light)',
-    padding: '4px 10px',
-    borderRadius: '4px',
-    border: '1px solid var(--success-border)',
-    fontWeight: '600'
-  },
-  mainLayout: {
-    display: 'flex',
-    gap: '20px',
-    flexGrow: 1,
-    minHeight: 0,
-    overflow: 'hidden'
-  },
-  chatCol: {
-    flex: '2 1 60%',
-    height: '100%',
-    display: 'flex',
-    flexDirection: 'column'
-  },
-  dashboardCol: {
-    flex: '1 1 40%',
-    height: '100%',
-    display: 'flex',
-    flexDirection: 'column'
-  }
 };
 
 export default App;

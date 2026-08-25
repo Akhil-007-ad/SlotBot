@@ -1,62 +1,43 @@
-import { parseMessage } from './chatbot/parser.js';
-import { detectNonTodayDates } from './chatbot/stateMachine.js';
+import { extractBookingDetails } from './chatbot/extraction.js';
+import { createChatHandler } from './chatbot/stateMachine.js';
 
-const testCases = [
-  {
-    input: "I want to book Zenith room for 4 people today at 3 PM for 2 hours.",
-    expected: { roomName: "Zenith", peopleCount: 4, durationHours: 2, startTimeStr: "15:00" }
-  },
-  {
-    input: "book quantum for 8 guests at 10 am for 3h",
-    expected: { roomName: "Quantum", peopleCount: 8, durationHours: 3, startTimeStr: "10:00" }
-  },
-  {
-    input: "Apex room for 12 attendees at 14:30 for 1.5 hours",
-    expected: { roomName: "Apex", peopleCount: 12, durationHours: 1.5, startTimeStr: "14:30" }
-  },
-  {
-    input: "Book a room tomorrow",
-    expectedDateReject: true
-  },
-  {
-    input: "Can I book Zenith next Monday?",
-    expectedDateReject: true
-  }
-];
-
-console.log("Running Parser Verification Tests...");
 let failed = 0;
+const assert = (condition, message) => { if (!condition) { console.error(`FAIL: ${message}`); failed++; } };
 
-testCases.forEach((tc, idx) => {
-  console.log(`\nTest #${idx + 1}: "${tc.input}"`);
-  
-  if (tc.expectedDateReject) {
-    const isRejected = detectNonTodayDates(tc.input);
-    if (isRejected) {
-      console.log("✅ Correctly rejected non-today date request.");
-    } else {
-      console.log("❌ Failed to reject non-today date request.");
-      failed++;
-    }
-    return;
-  }
-  
-  const parsed = parseMessage(tc.input);
-  let tcFailed = false;
-  
-  for (const key of Object.keys(tc.expected)) {
-    if (parsed[key] !== tc.expected[key]) {
-      console.log(`❌ Mismatch for ${key}: expected "${tc.expected[key]}", got "${parsed[key]}"`);
-      tcFailed = true;
-    }
-  }
-  
-  if (!tcFailed) {
-    console.log("✅ Passed parser checks.");
-  } else {
-    failed++;
-  }
+// Extraction regression tests: wording may vary, but every supplied slot must be read.
+const extracted = extractBookingDetails('Book a room for 6 members with TV availability from 10 to 11');
+assert(extracted.attendeeCount === 6, 'attendee count: "6 members"');
+assert(extracted.tvRequired === true, 'TV availability');
+assert(extracted.startTime === '10:00' && extracted.endTime === '11:00', 'bare time range');
+
+const rooms = [
+  { id: 'galaxy', name: 'Galaxy', capacity: 8, tvAvailability: true, minBookingHours: 0.5, maxBookingHours: 2, floor: '4th floor', location: 'Hyderabad', outlookEmail: null },
+  { id: 'vista', name: 'Vista', capacity: 6, tvAvailability: false, minBookingHours: 0.5, maxBookingHours: 2, floor: '4th floor', location: 'Hyderabad', outlookEmail: null }
+];
+let savedBooking;
+const chat = createChatHandler({
+  getRooms: async () => rooms,
+  findOverlap: async () => null,
+  isCalendarEnabled: () => false,
+  saveBooking: async details => { savedBooking = details; return { save: async () => {} }; }
 });
+const user = { id: 'test-user', email: 'organizer@techwave.com', name: 'Test User' };
+let session = undefined;
+const send = async message => { const result = await chat(message, session, user); session = result.session; return result; };
 
-console.log(`\nTests complete. Failed: ${failed}`);
-process.exit(failed > 0 ? 1 : 0);
+let result = await send('Book a room for 6 members with TV availability from 10 to 11');
+assert(result.roomsList?.length === 1 && result.roomsList[0].name === 'Galaxy', 'search filters TV and returns only eligible room cards');
+assert(session.step === 'AWAITING_ROOM_SELECTION', 'room-selection state');
+result = await send('Galaxy');
+assert(session.step === 'AWAITING_PARTICIPANTS', 'ask for invitees after room selection');
+result = await send('alex@techwave.com, sam@techwave.com');
+assert(session.step === 'AWAITING_SUBJECT', 'ask for invitation title after invitees');
+result = await send('Sprint planning');
+assert(session.step === 'AWAITING_DESCRIPTION', 'ask for description after title');
+result = await send('Plan the next sprint and assign owners.');
+assert(session.step === 'AWAITING_CONFIRMATION', 'show confirmation only after invitation details');
+await send('confirm');
+assert(savedBooking?.teammates?.length === 2 && savedBooking.subject === 'Sprint planning' && savedBooking.description.includes('assign owners'), 'booking retains invitees, title, and description');
+
+console.log(`Conversation workflow tests complete. Failed: ${failed}`);
+process.exit(failed ? 1 : 0);
