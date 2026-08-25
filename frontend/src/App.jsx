@@ -15,7 +15,11 @@ const initialSession = {
     endTime: null,
     tvRequired: null,
     selectedRoomId: null,
-    participants: []
+    // null = not answered yet. [] would mean "user explicitly said
+    // no participants" - using [] here would make the bot think the
+    // participants question has already been answered before the
+    // conversation even starts, and it would silently skip asking.
+    participants: null
   }
 };
 

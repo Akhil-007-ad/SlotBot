@@ -37,8 +37,6 @@ export const emptyBookingState = () => ({
    */
   participants: null,
 
-  participantsCollected: false,
-
   subject: null,
 
   description: null,
@@ -46,11 +44,11 @@ export const emptyBookingState = () => ({
   /*
    * Used later for teammate conflict handling.
    */
-  conflicts: [],
+  conflicts: null,
 
-  suggestedSlot: null,
+  suggestedBooking: null,
 
-  suggestedRoomId: null
+  forceBooking: false
 
 });
 
@@ -69,24 +67,6 @@ export const createBookingSession = (
     ...defaults,
     ...incoming
   };
-
-
-  /*
-   * Old sessions may contain participants: []
-   * without participantsCollected.
-   *
-   * Treat those as NOT answered.
-   */
-  if (
-    typeof incoming.participantsCollected !==
-    'boolean'
-  ) {
-
-    bookingData.participants = null;
-
-    bookingData.participantsCollected =
-      false;
-  }
 
 
   return {
@@ -108,53 +88,38 @@ export const createBookingSession = (
 /**
  * Merge extracted information into state.
  */
-export const mergeBookingState = (
-  state,
-  extracted
-) => {
+export const mergeBookingState = (state, extracted) => {
+  const merged = { ...state };
+  let invalidateRoom = false;
+  let invalidateConflicts = false;
+  const searchFields = ['attendeeCount', 'startTime', 'endTime', 'tvRequired'];
 
-  const merged = {
-    ...state
-  };
+  for (const [field, value] of Object.entries(extracted || {})) {
+    if (value === undefined || value === null) continue;
 
+    const changed = JSON.stringify(merged[field]) !== JSON.stringify(value);
 
-  for (
-    const [field, value]
-    of Object.entries(extracted || {})
-  ) {
+    if (searchFields.includes(field) && changed) invalidateRoom = true;
+    if ((field === 'participants' || field === 'selectedRoomId') && changed) invalidateConflicts = true;
 
-    if (
-      value !== undefined &&
-      value !== null
-    ) {
-
-      merged[field] = value;
-    }
+    merged[field] = value;
   }
 
-
-  /*
-   * Participants are special.
-   *
-   * We only consider the question answered
-   * if extraction actually produced participants.
-   */
-  if (
-    Object.prototype.hasOwnProperty.call(
-      extracted || {},
-      'participants'
-    )
-  ) {
-
-    merged.participantsCollected =
-      true;
+  // Don't wipe a room the user just (re)named in this very message.
+  if (invalidateRoom && extracted.selectedRoomId === undefined) {
+    merged.selectedRoomId = null;
+    merged.selectedRoomName = null;
+    invalidateConflicts = true;
   }
 
+  if (invalidateConflicts) {
+    merged.conflicts = null;
+    merged.suggestedBooking = null;
+    merged.forceBooking = false;
+  }
 
   return merged;
 };
-
-
 /**
  * Returns the first missing search field.
  */

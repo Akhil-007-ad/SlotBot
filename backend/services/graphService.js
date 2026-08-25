@@ -33,6 +33,29 @@ const buildUserGraphClient = (userAccessToken) => {
 // ─── Check if MS365 integration is enabled ──────────────────────────────────
 export const isMS365Enabled = () => process.env.MS365_ENABLED === 'true';
 
+// ─── Serialize a Date's LOCAL wall-clock fields for Graph ───────────────────
+//
+// Every Date object in this app (built in extraction.js/chatHandler.js via
+// setHours/getHours) represents the intended booking time using the SERVER'S
+// LOCAL timezone fields — the same convention used for MS_TIMEZONE (e.g.
+// "Asia/Kolkata"). Graph's "dateTime + timeZone" fields expect a naive
+// datetime string in that same timeZone.
+//
+// `Date.prototype.toISOString()` always returns the UTC representation, not
+// the local one. Using `.toISOString().replace('Z', '')` and then tagging the
+// result with timeZone: "Asia/Kolkata" silently applies the UTC offset TWICE
+// (once implicitly when the Date was built, once again by Graph interpreting
+// the UTC string as if it were already local) — e.g. a 09:00 IST booking is
+// sent as 03:30 and created 5:30 early. This helper reads the Date's local
+// getters directly so no offset is applied.
+const toGraphLocalDateTime = date => {
+  const pad = n => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+};
+
 // ─── Create a Room Booking Event on the user's Outlook calendar ──────────────
 /**
  * Creates a calendar event that:
@@ -69,11 +92,11 @@ export const createRoomBookingEvent = async ({
   const event = {
     subject,
     start: {
-      dateTime: startTime.toISOString().replace('Z', ''),
+      dateTime: toGraphLocalDateTime(startTime),
       timeZone: timezone
     },
     end: {
-      dateTime: endTime.toISOString().replace('Z', ''),
+      dateTime: toGraphLocalDateTime(endTime),
       timeZone: timezone
     },
     // ✅ Generates a Teams meeting link automatically
@@ -151,11 +174,11 @@ export const checkRoomAvailability = async (outlookEmail, startTime, endTime, us
     .post({
       schedules: [outlookEmail],
       startTime: {
-        dateTime: startTime.toISOString().replace('Z', ''),
+        dateTime: toGraphLocalDateTime(startTime),
         timeZone: timezone
       },
       endTime: {
-        dateTime: endTime.toISOString().replace('Z', ''),
+        dateTime: toGraphLocalDateTime(endTime),
         timeZone: timezone
       },
       availabilityViewInterval: 30
@@ -185,11 +208,11 @@ export const checkTeammatesAvailability = async (emails, startTime, endTime, use
     .post({
       schedules: emails,
       startTime: {
-        dateTime: startTime.toISOString().replace('Z', ''),
+        dateTime: toGraphLocalDateTime(startTime),
         timeZone: timezone
       },
       endTime: {
-        dateTime: endTime.toISOString().replace('Z', ''),
+        dateTime: toGraphLocalDateTime(endTime),
         timeZone: timezone
       },
       availabilityViewInterval: 30
@@ -236,11 +259,11 @@ export const findFirstFreeSlotGraph = async (emails, roomEmail, durationHours, u
     .post({
       schedules: [...emails, roomEmail],
       startTime: {
-        dateTime: startSearch.toISOString().replace('Z', ''),
+        dateTime: toGraphLocalDateTime(startSearch),
         timeZone: timezone
       },
       endTime: {
-        dateTime: midnight.toISOString().replace('Z', ''),
+        dateTime: toGraphLocalDateTime(midnight),
         timeZone: timezone
       },
       availabilityViewInterval: 30

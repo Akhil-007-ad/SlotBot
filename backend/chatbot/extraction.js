@@ -248,19 +248,6 @@ const extractAttendeeCount = text => {
 
 
   /*
-   * Direct number:
-   *
-   * "5"
-   */
-  if (
-    /^\d+$/.test(trimmed)
-  ) {
-
-    return Number(trimmed);
-  }
-
-
-  /*
    * "5 people"
    * "5 attendees"
    * "5 members"
@@ -328,7 +315,7 @@ const extractTimes = text => {
 
   const bareHourRange =
     text.match(
-      /\b(?:from\s+)?([01]?\d|2[0-3])\s*(?:to|until|till|-)\s*([01]?\d|2[0-3])\b/i
+      /\b(?<!:)(?:from\s+)?([01]?\d|2[0-3])(?!:\d)\s*(?:to|until|till|-)\s*(?<!:)([01]?\d|2[0-3])(?!:\d)\b/i
     );
 
 
@@ -411,18 +398,40 @@ const extractTimes = text => {
     (match = pattern.exec(text)) !== null
   ) {
 
-    found.push(
+    if (match[3]) {
 
-      match[3]
+      found.push(
+        toTime(
+          match[1],
+          match[2],
+          match[3].toLowerCase()
+        )
+      );
 
-        ? toTime(
-            match[1],
-            match[2],
-            match[3].toLowerCase()
-          )
+    } else {
 
-        : `${pad(match[4])}:${match[5]}`
-    );
+      /*
+       * A bare "HH:MM" with no am/pm marker. Apply the same
+       * office-hours convention used everywhere else in this
+       * file: an ambiguous hour of 1-7 is assumed PM (e.g. a
+       * standalone answer of "2:30" for a meeting today means
+       * 14:30, not 02:30). Hours outside that range (8-23, or
+       * explicit "00") are left as-is, since they're either
+       * already unambiguous 24-hour values or early-morning
+       * hours nobody books a same-day meeting room for.
+       */
+      const rawHour =
+        Number(match[4]);
+
+      const adjustedHour =
+        rawHour >= 1 && rawHour <= 7
+          ? rawHour + 12
+          : rawHour;
+
+      found.push(
+        `${pad(adjustedHour)}:${match[5]}`
+      );
+    }
   }
 
 
@@ -473,7 +482,10 @@ const extractRoom = (
    PARTICIPANTS
 ============================================================ */
 
-const extractParticipants = text => {
+const extractParticipants = (
+  text,
+  { expectedField } = {}
+) => {
 
   const emails =
     text.match(
@@ -495,11 +507,30 @@ const extractParticipants = text => {
 
 
   /*
-   * Explicitly no participants.
+   * Unambiguous "no participants" phrasing is safe to recognize
+   * regardless of which question is currently being asked, since
+   * these phrases don't overlap with answers to other questions.
    */
   if (
-    /^(none|no|n|no participants|nobody|no one|only me|just me)$/i
-      .test(text.trim())
+    /\b(no participants|nobody|no one|only me|just me)\b/i.test(text.trim())
+  ) {
+
+    return [];
+  }
+
+
+  /*
+   * A bare "none" / "no" / "n" is ambiguous — it's also how users
+   * answer the TV yes/no question, a confirmation prompt, or a
+   * conflict-decision cancel. Only treat it as "no participants"
+   * when we are actually asking about participants; otherwise this
+   * silently locks in participants = [] before the participants
+   * question is ever asked, and the state machine then skips that
+   * question entirely.
+   */
+  if (
+    expectedField === 'participants' &&
+    /^(none|no|n)$/i.test(text.trim())
   ) {
 
     return [];
@@ -535,6 +566,10 @@ const extractExpectedField = (
   if (
     expectedField === 'attendeeCount'
   ) {
+
+    if (/^\d+$/.test(text.trim())) {
+      return { attendeeCount: Number(text.trim()) };
+    }
 
     const count =
       extractAttendeeCount(text);
@@ -705,7 +740,7 @@ const extractExpectedField = (
   ) {
 
     const participants =
-      extractParticipants(text);
+      extractParticipants(text, { expectedField });
 
 
     if (
@@ -1006,12 +1041,27 @@ export const extractBookingDetails = (
 
   /*
    * ROOM
+   *
+   * Only scan the message for a room-name substring when the user
+   * could plausibly be naming one. Skip this while the expected
+   * answer is free-form text (subject/description) or participant
+   * emails — otherwise a coincidental room-name substring in a
+   * subject line or agenda note gets parsed as a fresh room
+   * selection and incorrectly overwrites/invalidates the one
+   * already chosen.
    */
-  const room =
-    extractRoom(
-      text,
-      rooms
+  const roomScanAllowed =
+    !['subject', 'description', 'participants'].includes(
+      expectedField
     );
+
+  const room =
+    roomScanAllowed
+      ? extractRoom(
+          text,
+          rooms
+        )
+      : undefined;
 
 
   if (room) {
@@ -1031,7 +1081,7 @@ export const extractBookingDetails = (
   ) {
 
     const participants =
-      extractParticipants(text);
+      extractParticipants(text, { expectedField });
 
 
     if (

@@ -169,7 +169,7 @@ export const shouldAskParticipants = state => {
   return (
     shouldSearchRooms(state) &&
     Boolean(state.selectedRoomId) &&
-    (!state.participantsCollected)
+    state.participants === null
   );
 };
 
@@ -182,7 +182,7 @@ export const shouldAskSubject = state => {
 
   return (
     Boolean(state.selectedRoomId) &&
-    state.participantsCollected === true &&
+    state.participants !== null &&
     (
       !state.subject ||
       !state.subject.trim()
@@ -195,7 +195,7 @@ export const shouldAskDescription = state => {
 
   return (
     Boolean(state.selectedRoomId) &&
-    state.participantsCollected === true &&
+    state.participants !== null &&
     Boolean(
       state.subject &&
       state.subject.trim()
@@ -217,7 +217,7 @@ export const shouldAskFinalConfirmation = state => {
   return (
     Boolean(state.selectedRoomId) &&
 
-    state.participantsCollected === true &&
+    state.participants !== null &&
 
     Boolean(
       state.subject &&
@@ -330,8 +330,8 @@ export const determineNextState = ({
   ---------------------------------------------------------- */
 
   if (
-  !state.participantsCollected
-) {
+    state.participants === null
+  ) {
 
   return {
     step:
