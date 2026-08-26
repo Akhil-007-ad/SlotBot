@@ -3,8 +3,8 @@ import MessageBubble from './MessageBubble';
 import ConfirmationCard from './ConfirmationCard';
 
 const QUICK_SUGGESTIONS = [
-  "Book a room for 2 people",
-  "Book a room for 5 people",
+  "Book a room for 4 people",
+  "Book a room for 6 people",
   "Restart booking"
 ];
 
@@ -29,7 +29,7 @@ const ConflictResolutionCard = ({ bookingData, onSendMessage, onCancel }) => {
   };
 
   return (
-    <div className="animate-fade-in flex flex-col gap-4 p-5 rounded-xl bg-white border border-rose-200 shadow-[0_4px_12px_rgba(244,63,94,0.08)] my-3 max-w-[400px]">
+    <div className="animate-fade-in flex flex-col gap-4 p-5 rounded-xl bg-white border border-rose-200 shadow-[0_4px_12px_rgba(244,63,94,0.08)] my-3 max-w-100">
       <div className="flex flex-col gap-1">
         <span className="self-start text-[0.7rem] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded uppercase tracking-wide">
           ⚠️ Timing Conflict
@@ -40,10 +40,10 @@ const ConflictResolutionCard = ({ bookingData, onSendMessage, onCancel }) => {
       <div className="text-xs text-slate-600 leading-relaxed py-2 border-t border-b border-slate-100">
         <p className="font-semibold text-rose-700 mb-1">Conflict details:</p>
         <p>{conflictReason || 'Some attendees are busy.'}</p>
-        
+
         {recommendedStartTimeStr ? (
           <div className="mt-3 p-2.5 bg-emerald-50 rounded-lg border border-emerald-100 animate-fade-in">
-            <p className="font-semibold text-emerald-800 mb-1">💡 Recommended Free Slot:</p>
+            <p className="font-semibold text-emerald-800 mb-1">Recommended Free Slot:</p>
             <p className="text-emerald-700 font-medium">
               ⏰ {formatTimeStr(recommendedStartTimeStr)} – {getEndTimeStr(recommendedStartTimeStr, durationHours)}
             </p>
@@ -87,7 +87,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [mentionTriggerIndex, setMentionTriggerIndex] = useState(-1);
   const [selectedRoomName, setSelectedRoomName] = useState(null);
-  
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -101,18 +101,51 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
   }, [session]);
 
   // Load employee directory
+  // Load employee directory / people suggestions
   useEffect(() => {
     if (!apiFetch) return;
+
     const loadEmployees = async () => {
       try {
         const res = await apiFetch('/api/chat/employees');
-        if (res.ok) {
-          setEmployees(await res.json());
+
+        if (!res.ok) {
+          throw new Error(
+            `Employee search request failed with status ${res.status}`
+          );
         }
+
+        const data = await res.json();
+
+        // console.log('Employee search response:', data);
+
+        // Backend returns:
+        // {
+        //   success: true,
+        //   source: 'directory' | 'people',
+        //   employees: [...]
+        // }
+        const employeeList = Array.isArray(data)
+          ? data
+          : (data.employees || []);
+
+        setEmployees(employeeList);
+
+        // console.log(
+        //   `Loaded ${employeeList.length} employees from ${Array.isArray(data) ? 'legacy-array-response' : data.source
+        //   }`
+        // );
+
       } catch (err) {
-        console.error('Failed to load employees for autocomplete', err);
+        console.error(
+          'Failed to load employees for autocomplete:',
+          err
+        );
+
+        setEmployees([]);
       }
     };
+
     loadEmployees();
   }, [apiFetch]);
 
@@ -145,8 +178,8 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
       const afterAt = val.substring(lastAtIdx + 1);
       if (!afterAt.includes(' ') && !afterAt.includes(',')) {
         const query = afterAt.toLowerCase();
-        const filtered = employees.filter(emp => 
-          emp.name.toLowerCase().includes(query) || 
+        const filtered = employees.filter(emp =>
+          emp.name.toLowerCase().includes(query) ||
           emp.email.toLowerCase().includes(query)
         );
         setSuggestions(filtered);
@@ -188,7 +221,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
 
   const showConfirmationCard = session?.step === 'AWAITING_CONFIRMATION' && session?.bookingData;
   const showConflictCard = session?.step === 'AWAITING_CONFLICT_RESOLUTION' && session?.bookingData;
-  
+
   // Disable normal text input when selecting a room or acting on cards
   const showRoomCardsStep = session?.step === 'AWAITING_ROOM_SELECTION';
   const disableInput = showConfirmationCard || showConflictCard || showRoomCardsStep;
@@ -198,7 +231,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
   const lastBotMessageId = botMessages[botMessages.length - 1]?.id;
 
   return (
-    <div className="flex flex-col h-[85vh] rounded-xl border border-slate-200 shadow-[0_2px_6px_rgba(0,0,0,0.06),0_8px_20px_rgba(0,0,0,0.08),0_20px_40px_rgba(0,0,0,0.10)] overflow-hidden bg-white scrollbar-thin relative">
+    <div className="flex flex-col h-[calc(100vh-110px)] rounded-xl border border-slate-200 shadow-[0_2px_6px_rgba(0,0,0,0.06),0_8px_20px_rgba(0,0,0,0.08),0_20px_40px_rgba(0,0,0,0.10)] overflow-hidden bg-white relative">
 
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-200 bg-white shrink-0">
@@ -216,7 +249,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         {messages.map(msg => (
           <React.Fragment key={msg.id}>
             <MessageBubble message={msg} />
-            
+
             {/* Dynamic Clickable Room Selection Cards */}
             {msg.roomsList && msg.roomsList.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full pl-[42px] my-3">
@@ -241,18 +274,18 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
                       ].join(' ')}
                     >
                       <div className="flex justify-between items-start">
-                        <h4 className="font-bold text-slate-900 text-sm leading-snug">{r.name}</h4>
+                        <h4 className="font-bold text-lg text-blue-950 leading-snug">{r.name}</h4>
                         {isSelected && (
                           <span className="text-[10px] font-bold text-blue-600 bg-blue-100/80 px-1.5 py-0.5 rounded">
                             ✓ Selected
                           </span>
                         )}
                       </div>
-                      
-                      <div className="text-[11px] text-slate-500 space-y-1">
-                        <div>👥 **Capacity**: {r.capacity} people</div>
-                        <div>📍 **Location**: {r.location || 'Main Floor'}</div>
-                        <div>🖥 **TV/Display**: {r.hasTv ? 'Available' : 'Not Available'}</div>
+
+                      <div className="text-xs text-slate-500 space-y-1 font-semibold">
+                        <div>👥 Capacity: <span className='text-violet-900 font-bold'>{r.capacity}</span> people</div>
+                        <div>📍 Location: <span className='text-violet-900 font-bold'>{r.location || 'Main Floor'}</span></div>
+                        <div>🖥 TV/Display: <span className='text-violet-900 font-bold'>{r.hasTv ? 'Available' : 'Not Available'}</span></div>
                       </div>
 
                       {msg.id === lastBotMessageId && (
@@ -277,7 +310,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         ))}
 
         {showConfirmationCard && (
-          <div className="flex justify-start w-full pl-[42px] my-2">
+          <div className="flex justify-start w-full pl-10.5 my-2">
             <ConfirmationCard
               bookingData={session.bookingData}
               onConfirm={onConfirmBooking}
@@ -287,7 +320,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         )}
 
         {showConflictCard && (
-          <div className="flex justify-start w-full pl-[42px] my-2">
+          <div className="flex justify-start w-full pl-10.5 my-2">
             <ConflictResolutionCard
               bookingData={session.bookingData}
               onSendMessage={onSendMessage}
@@ -299,7 +332,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         {/* loading state while searching rooms */}
         {isTyping && (
           session?.step === 'AWAITING_ROOM_SELECTION' ? (
-            <div className="flex items-center gap-2 py-1 my-2 pl-[42px] text-xs text-slate-500 animate-pulse font-medium">
+            <div className="flex items-center gap-2 py-1 my-2 pl-10.5 text-xs text-slate-500 animate-pulse font-medium">
               <span>🔍</span> Searching for eligible and available rooms...
             </div>
           ) : (
@@ -312,7 +345,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
 
       {/* Floating Suggestions List */}
       {showSuggestions && suggestions.length > 0 && (
-        <div className="absolute left-5 bottom-[70px] w-[calc(100%-40px)] max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-[0_10px_25px_rgba(0,0,0,0.15)] z-30 divide-y divide-slate-100 animate-fade-in">
+        <div className="absolute left-5 bottom-17.5 w-[calc(100%-40px)] max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-[0_10px_25px_rgba(0,0,0,0.15)] z-30 divide-y divide-slate-100 animate-fade-in">
           {suggestions.map((emp, idx) => (
             <div
               key={emp.email}
@@ -361,10 +394,10 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           placeholder={
-            showRoomCardsStep 
-              ? "Select an available room above..." 
-              : disableInput 
-                ? "Please action the card above..." 
+            showRoomCardsStep
+              ? "Select an available room above..."
+              : disableInput
+                ? "Please action the card above..."
                 : "Type message... (use @ to invite teammates)"
           }
           disabled={showConfirmationCard || showConflictCard}

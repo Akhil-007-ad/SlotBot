@@ -199,36 +199,125 @@ export const checkRoomAvailability = async (outlookEmail, startTime, endTime, us
  * Checks which of the specified teammate emails are busy during the given time.
  * Returns an array of busy emails.
  */
-export const checkTeammatesAvailability = async (emails, startTime, endTime, userAccessToken) => {
-  const client   = buildUserGraphClient(userAccessToken);
+export const checkTeammatesAvailability = async (
+  emails,
+  startTime,
+  endTime,
+  userAccessToken
+) => {
+  const client = buildUserGraphClient(userAccessToken);
+
   const timezone = process.env.MS_TIMEZONE || 'Asia/Kolkata';
 
   const response = await client
     .api('/me/calendar/getSchedule')
     .post({
       schedules: emails,
+
       startTime: {
         dateTime: toGraphLocalDateTime(startTime),
         timeZone: timezone
       },
+
       endTime: {
         dateTime: toGraphLocalDateTime(endTime),
         timeZone: timezone
       },
+
       availabilityViewInterval: 30
     });
 
-  const busyEmails = [];
+  console.log('\n========== GRAPH GET SCHEDULE ==========');
+  console.log(
+    JSON.stringify(response.value, null, 2)
+  );
+  console.log('========================================\n');
+
+  const unavailableEmails = [];
+
   for (const item of response.value || []) {
-    const viewChars = item.availabilityView?.split('') || [];
-    const isBusy = viewChars.some(char => char === '2' || char === '3') ||
-                   item.scheduleItems?.some(sItem => sItem.status === 'busy' || sItem.status === 'oof');
-    if (isBusy) {
-      busyEmails.push(item.scheduleId);
+
+    console.log(
+      '\nChecking schedule for:',
+      item.scheduleId
+    );
+
+    console.log(
+      'availabilityView:',
+      item.availabilityView
+    );
+
+    console.log(
+      'scheduleItems:',
+      item.scheduleItems
+    );
+
+    /*
+     * Microsoft Graph availabilityView:
+     *
+     * 0 = Free
+     * 1 = Tentative
+     * 2 = Busy
+     * 3 = Out of Office
+     * 4 = Working Elsewhere
+     */
+
+    const unavailableFromView =
+      item.availabilityView
+        ?.split('')
+        .some(char =>
+          ['1', '2', '3', '4'].includes(char)
+        );
+
+    /*
+     * Calendar event statuses:
+     *
+     * tentative
+     * busy
+     * oof
+     * workingElsewhere
+     */
+
+    const unavailableFromEvents =
+      item.scheduleItems?.some(
+        sItem =>
+          [
+            'tentative',
+            'busy',
+            'oof',
+            'workingElsewhere'
+          ].includes(sItem.status)
+      );
+
+    const isUnavailable =
+      unavailableFromView || unavailableFromEvents;
+
+    console.log(
+      'Unavailable from availabilityView:',
+      unavailableFromView
+    );
+
+    console.log(
+      'Unavailable from scheduleItems:',
+      unavailableFromEvents
+    );
+
+    console.log(
+      'IS UNAVAILABLE:',
+      isUnavailable
+    );
+
+    if (isUnavailable) {
+      unavailableEmails.push(item.scheduleId);
     }
   }
 
-  return busyEmails;
+  console.log(
+    'FINAL UNAVAILABLE EMAILS:',
+    unavailableEmails
+  );
+
+  return unavailableEmails;
 };
 
 // ─── Find First Free Slot via Graph ──────────────────────────────────────────

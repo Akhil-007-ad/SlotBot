@@ -3,6 +3,7 @@ import {
   findOverlappingBooking
 } from '../services/bookingService.js';
 import {
+  checkTeammatesAvailability,
   checkRoomAvailability,
   createRoomBookingEvent,
   isMS365Enabled
@@ -75,6 +76,7 @@ const isCancelMessage = message => {
   );
 };
 
+
 const rankRooms = (rooms, attendeeCount) => {
   return [...rooms].sort((a, b) => {
     const aExcess = Number(a.capacity || 0) - attendeeCount;
@@ -86,24 +88,104 @@ const rankRooms = (rooms, attendeeCount) => {
   });
 };
 
-const searchRooms = async (rooms, state, findOverlap) => {
+const searchRooms = async (rooms, state, findOverlap, { explain = false } = {}) => {
   const start = toLocalDateTime(state.date, state.startTime);
   const end = toLocalDateTime(state.date, state.endTime);
-  if (!start || !end) return [];
+
+  if (!start || !end) {
+    return explain
+      ? {
+        availableRooms: [],
+        rejectedRooms: []
+      }
+      : [];
+  }
+
   const durationHours = (end.getTime() - start.getTime()) / 36e5;
-  if (durationHours <= 0) return [];
+
+  if (durationHours <= 0) {
+    return explain
+      ? {
+        availableRooms: [],
+        rejectedRooms: []
+      }
+      : [];
+  }
 
   const availableRooms = [];
+  const rejectedRooms = [];
+
   for (const room of rooms) {
-    if (Number(room.capacity || 0) < Number(state.attendeeCount)) continue;
-    if (state.tvRequired === true && !room.tvAvailability) continue;
-    if (room.minBookingHours != null && durationHours < Number(room.minBookingHours)) continue;
-    if (room.maxBookingHours != null && durationHours > Number(room.maxBookingHours)) continue;
+
+    // 1. Capacity check
+    if (Number(room.capacity || 0) < Number(state.attendeeCount)) {
+      rejectedRooms.push({
+        room,
+        reason: `Capacity is ${room.capacity}, but ${state.attendeeCount} people are required.`
+      });
+      continue;
+    }
+
+    // 2. TV check
+    if (state.tvRequired === true && !room.tvAvailability) {
+      rejectedRooms.push({
+        room,
+        reason: 'TV is required, but this room does not have a TV.'
+      });
+      continue;
+    }
+
+    // 3. Minimum booking duration
+    if (
+      room.minBookingHours != null &&
+      durationHours < Number(room.minBookingHours)
+    ) {
+      rejectedRooms.push({
+        room,
+        reason: `Minimum booking duration is ${room.minBookingHours} hour(s).`
+      });
+      continue;
+    }
+
+    // 4. Maximum booking duration
+    if (
+      room.maxBookingHours != null &&
+      durationHours > Number(room.maxBookingHours)
+    ) {
+      rejectedRooms.push({
+        room,
+        reason: `Maximum booking duration is ${room.maxBookingHours} hour(s).`
+      });
+      continue;
+    }
+
+    // 5. Database booking overlap
     const overlaps = await findOverlap(room.name, start, end);
-    if (overlaps) continue;
+
+    if (overlaps) {
+      rejectedRooms.push({
+        room,
+        reason: 'The room is already booked during this time.'
+      });
+      continue;
+    }
+
     availableRooms.push(room);
   }
-  return rankRooms(availableRooms, Number(state.attendeeCount));
+
+  const rankedRooms = rankRooms(
+    availableRooms,
+    Number(state.attendeeCount)
+  );
+
+  if (explain) {
+    return {
+      availableRooms: rankedRooms,
+      rejectedRooms
+    };
+  }
+
+  return rankedRooms;
 };
 
 const isFutureTodayTime = (date, time) => {
@@ -112,22 +194,64 @@ const isFutureTodayTime = (date, time) => {
   return dateTime.getTime() > Date.now();
 };
 
-const checkParticipantConflicts = async ({ participants, startTime, endTime, accessToken, checkParticipantCalendar }) => {
-  const conflicts = [];
-  if (!participants || !participants.length) return conflicts;
-  for (const email of participants) {
-    try {
-      const free = await checkParticipantCalendar(email, startTime, endTime, accessToken);
-      if (!free) conflicts.push({ email, startTime, endTime });
-    } catch (error) {
-      console.error(`Calendar check failed for ${email}:`, error.message);
-      conflicts.push({ email, startTime, endTime, reason: 'Unable to verify calendar availability' });
-    }
+const checkParticipantConflicts = async ({
+  participants,
+  startTime,
+  endTime,
+  accessToken,
+  checkParticipantAvailability
+}) => {
+  if (!Array.isArray(participants) || participants.length === 0) {
+    return [];
   }
-  return conflicts;
+
+  try {
+    console.log('\n========== PEOPLE CALENDAR CHECK ==========');
+    console.log('People being checked:', participants);
+    console.log('Start:', startTime);
+    console.log('End:', endTime);
+    console.log('Access token exists:', !!accessToken);
+
+    const unavailableEmails = await checkParticipantAvailability(
+      participants,
+      startTime,
+      endTime,
+      accessToken
+    );
+
+    console.log('Unavailable people:', unavailableEmails);
+    console.log('============================================\n');
+
+    return unavailableEmails.map(email => ({
+      email,
+      startTime,
+      endTime
+    }));
+
+  } catch (error) {
+    console.error(
+      'Calendar availability check failed:',
+      error.message
+    );
+
+    return participants.map(email => ({
+      email,
+      startTime,
+      endTime,
+      reason: 'Unable to verify calendar availability'
+    }));
+  }
 };
 
-const findNearestAlternative = async ({ rooms, state, findOverlap, checkRoomCalendar, checkParticipantCalendar, accessToken }) => {
+const findNearestAlternative = async ({
+  rooms,
+  state,
+  findOverlap,
+  checkRoomCalendar,
+  checkParticipantCalendar,
+  accessToken,
+  requesterEmail
+}) => {
   const requestedStart = toLocalDateTime(state.date, state.startTime);
   const requestedEnd = toLocalDateTime(state.date, state.endTime);
   if (!requestedStart || !requestedEnd) return null;
@@ -153,12 +277,17 @@ const findNearestAlternative = async ({ rooms, state, findOverlap, checkRoomCale
         const roomFree = await checkRoomCalendar(room.outlookEmail, candidateStart, candidateEnd, accessToken);
         if (!roomFree) continue;
       }
+      const peopleToCheck = [
+        requesterEmail,
+        ...(state.participants || [])
+      ].filter(Boolean);
+
       const conflicts = await checkParticipantConflicts({
-        participants: state.participants || [],
+        participants: peopleToCheck,
         startTime: candidateStart,
         endTime: candidateEnd,
         accessToken,
-        checkParticipantCalendar
+        checkParticipantAvailability: checkParticipantCalendar
       });
       if (conflicts.length === 0) {
         return {
@@ -183,7 +312,7 @@ export const createChatHandler = ({
   isCalendarEnabled = isMS365Enabled,
   checkCalendar = checkRoomAvailability,
   createCalendarEvent = createRoomBookingEvent,
-  checkParticipantCalendar = checkRoomAvailability
+  checkParticipantAvailability = checkTeammatesAvailability
 } = {}) => async (message, session, user) => {
 
   const cleanMessage = String(message || '').trim();
@@ -273,7 +402,7 @@ export const createChatHandler = ({
     current.startTime = null; current.endTime = null;
     nextSession.step = STATES.COLLECTING_DETAILS;
     nextSession.expectedField = EXPECTED_FIELDS.START_TIME;
-    return { reply: '⚠️ Please choose a start time later than the current time. SlotBot only allows future bookings for today.', session: nextSession };
+    return { reply: 'Please choose a start time later than the current time. SlotBot only allows future bookings.', session: nextSession };
   }
 
   // Validate that a room selection actually satisfies the current
@@ -360,23 +489,50 @@ export const createChatHandler = ({
     case 'ASK_DESCRIPTION':
       return { reply: nextStateInfo.question || 'Please provide ' + nextStateInfo.expectedField, session: nextSession };
 
-    case 'SHOW_ROOMS':
-      const availableRooms = await searchRooms(rooms, current, findOverlap);
+    case 'SHOW_ROOMS': {
+      const roomSearch = await searchRooms(
+        rooms,
+        current,
+        findOverlap,
+        { explain: true }
+      );
+
+      const availableRooms = roomSearch.availableRooms;
+      const rejectedRooms = roomSearch.rejectedRooms;
+
       if (availableRooms.length === 0) {
+
         current.selectedRoomId = null;
         current.selectedRoomName = null;
+
         nextSession.step = STATES.COLLECTING_DETAILS;
         nextSession.expectedField = EXPECTED_FIELDS.START_TIME;
+
+        const reasonLines = rejectedRooms.map(({ room, reason }) => {
+          return `• **${room.name}** — ${reason}`;
+        });
+
         return {
-          reply: `No rooms are available today for **${current.attendeeCount} people** from **${formatTime(current.startTime)}** to **${formatTime(current.endTime)}**${current.tvRequired ? ' with a TV' : ''}.\n\nPlease provide another start time.`,
+          reply:
+            `❌ **No rooms are available for your request.**\n\n` +
+            `**Requested:**\n` +
+            `👥 People: ${current.attendeeCount}\n` +
+            `🕒 Time: ${formatTime(current.startTime)} – ${formatTime(current.endTime)}` +
+            `${current.tvRequired ? '\n📺 TV: Required' : ''}\n\n` +
+            `**Why the rooms were rejected:**\n` +
+            `${reasonLines.length ? reasonLines.join('\n') : 'No matching rooms were found.'}\n\n` +
+            `Please provide another time, and I will check the rooms again.`,
+
           session: nextSession
         };
       }
+
       return {
         reply: 'I found these rooms that best match your requirements. Please select one:',
         session: nextSession,
         roomsList: availableRooms.map(roomDto)
       };
+    }
 
     case 'ASK_PARTICIPANTS':
       const selectedRoom = rooms.find(room => room.id === current.selectedRoomId || room._id?.toString() === String(current.selectedRoomId) || room.name === current.selectedRoomId);
@@ -399,46 +555,245 @@ export const createChatHandler = ({
   // Instead of completely relying on determineNextState to trigger the calendar checks, 
   // we can intercept BEFORE nextStateInfo if participants are set but conflicts haven't been checked!
 
-  if (current.participants !== null && current.conflicts === null && !current.forceBooking) {
-    console.log('[CONFLICT CHECK] participants:', JSON.stringify(current.participants), '| conflicts already checked:', current.conflicts !== null);
-    const startTime = toLocalDateTime(today, current.startTime);
-    const endTime = toLocalDateTime(today, current.endTime);
+  if (
+    current.participants !== null &&
+    current.conflicts === null &&
+    !current.forceBooking
+  ) {
+
+    console.log(
+      '\n========== CONFLICT CHECK START =========='
+    );
+
+    const startTime = toLocalDateTime(
+      today,
+      current.startTime
+    );
+
+    const endTime = toLocalDateTime(
+      today,
+      current.endTime
+    );
+
+    /*
+     * Get the requester/organizer email.
+     *
+     * Depending on how your Microsoft login user object
+     * is created, one of these should contain the email.
+     */
+    const requesterEmail =
+      user?.mail ||
+      user?.email ||
+      user?.userPrincipalName;
+
+    console.log(
+      'Requester:',
+      requesterEmail
+    );
+
+    console.log(
+      'Teammates:',
+      current.participants
+    );
+
+    /*
+     * Check requester + teammates together.
+     */
+    const peopleToCheck = [
+      requesterEmail,
+      ...(current.participants || [])
+    ].filter(Boolean);
+
+    /*
+     * Remove duplicate emails.
+     */
+    const uniquePeopleToCheck = [
+      ...new Set(
+        peopleToCheck.map(
+          email => email.toLowerCase()
+        )
+      )
+    ];
+
+    console.log(
+      'People being checked:',
+      uniquePeopleToCheck
+    );
+
+    /*
+     * Check Microsoft 365 calendars.
+     */
     const conflicts = await checkParticipantConflicts({
-      participants: current.participants,
+      participants: uniquePeopleToCheck,
       startTime,
       endTime,
       accessToken: user?.accessToken,
-      checkParticipantCalendar
+      checkParticipantAvailability
     });
 
+    console.log(
+      'Calendar conflicts:',
+      JSON.stringify(conflicts, null, 2)
+    );
+
+    console.log(
+      '========== CONFLICT CHECK END ==========\n'
+    );
+
+    /*
+     * --------------------------------------------------
+     * CONFLICT FOUND
+     * --------------------------------------------------
+     */
     if (conflicts.length > 0) {
+
       current.conflicts = conflicts;
+
+      /*
+       * Find an alternative time where:
+       *
+       * 1. Room is available
+       * 2. Requester is available
+       * 3. All teammates are available
+       */
       const suggestion = await findNearestAlternative({
-        rooms, state: current, findOverlap, checkRoomCalendar: checkCalendar, checkParticipantCalendar, accessToken: user?.accessToken
+        rooms,
+        state: current,
+        findOverlap,
+        checkRoomCalendar: checkCalendar,
+        checkParticipantCalendar: checkParticipantAvailability,
+        accessToken: user?.accessToken,
+        requesterEmail
       });
+
       current.suggestedBooking = suggestion;
 
-      nextSession.step = STATES.AWAITING_CONFLICT_DECISION;
-      nextSession.expectedField = EXPECTED_FIELDS.CONFLICT_DECISION;
+      nextSession.step =
+        STATES.AWAITING_CONFLICT_DECISION;
 
+      nextSession.expectedField =
+        EXPECTED_FIELDS.CONFLICT_DECISION;
+
+      /*
+       * Separate requester conflicts from teammate conflicts
+       * so the message is clearer.
+       */
+      const requesterConflict =
+        conflicts.find(
+          conflict =>
+            conflict.email?.toLowerCase() ===
+            requesterEmail?.toLowerCase()
+        );
+
+      const teammateConflicts =
+        conflicts.filter(
+          conflict =>
+            conflict.email?.toLowerCase() !==
+            requesterEmail?.toLowerCase()
+        );
+
+      let conflictMessage =
+        '⚠️ **Calendar conflicts found.**\n\n';
+
+      if (requesterConflict) {
+        conflictMessage +=
+          `👤 **You** already have a calendar event during this time.\n\n`;
+      }
+
+      if (teammateConflicts.length > 0) {
+        conflictMessage +=
+          `👥 **Teammate conflicts:**\n`;
+
+        conflictMessage += teammateConflicts
+          .map(
+            conflict =>
+              `• **${conflict.email}**`
+          )
+          .join('\n');
+
+        conflictMessage += '\n\n';
+      }
+
+      /*
+       * Alternative found.
+       */
       if (suggestion) {
+
+        conflictMessage +=
+          `I found the nearest time where the room and all checked calendars are available:\n\n`;
+
+        conflictMessage +=
+          `🏢 **${suggestion.roomName}**\n`;
+
+        conflictMessage +=
+          `🕒 **${formatTime(
+            suggestion.startTime
+          )} – ${formatTime(
+            suggestion.endTime
+          )}**\n\n`;
+
+        conflictMessage +=
+          `What would you like to do?\n\n`;
+
+        conflictMessage +=
+          `**1. Confirm with suggestion**\n`;
+
+        conflictMessage +=
+          `**2. Force book despite calendar conflicts**\n`;
+
+        conflictMessage +=
+          `**3. Cancel**`;
+
         return {
-          reply: `⚠️ Some teammates have calendar conflicts:\n\n${conflicts.map(item => `• **${item.email}**`).join('\\n')}\n\nI found the nearest conflict-free option:\n\n🏢 **${suggestion.roomName}**\n🕒 **${formatTime(suggestion.startTime)} – ${formatTime(suggestion.endTime)}**\n\nWhat would you like to do?\n\n**1. Confirm with suggestion**\n**2. Force book despite teammate conflicts**\n**3. Cancel**`,
+          reply: conflictMessage,
           session: nextSession,
           conflicts,
           suggestedBooking: suggestion
         };
-      } else {
-        return {
-          reply: `⚠️ Some teammates have calendar conflicts:\n\n${conflicts.map(item => `• **${item.email}**`).join('\\n')}\n\nI could not find another conflict-free slot later today.\n\nWhat would you like to do?\n\n**1. Confirm with suggestion**\n**2. Force book despite teammate conflicts**\n**3. Cancel**`,
-          session: nextSession,
-          conflicts
-        };
       }
-    } else {
-      // Empty array to mark as checked with no conflicts
-      current.conflicts = [];
+
+      /*
+       * No alternative found.
+       */
+      conflictMessage +=
+        `I could not find another conflict-free slot later today.\n\n`;
+
+      conflictMessage +=
+        `What would you like to do?\n\n`;
+
+      conflictMessage +=
+        `**1. Continue with the original time**\n`;
+
+      conflictMessage +=
+        `**2. Force book despite calendar conflicts**\n`;
+
+      conflictMessage +=
+        `**3. Cancel**`;
+
+      return {
+        reply: conflictMessage,
+        session: nextSession,
+        conflicts
+      };
     }
+
+    /*
+     * --------------------------------------------------
+     * NO CONFLICT
+     * --------------------------------------------------
+     */
+
+    console.log(
+      '✅ Requester and all teammates are available.'
+    );
+
+    /*
+     * Empty array means:
+     *
+     * "Calendar check has been completed and nobody
+     * has a conflict."
+     */
+    current.conflicts = [];
   }
 
   // Now, what if the user confirmed?

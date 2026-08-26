@@ -37,11 +37,6 @@ export const requireAuth = async (req, res, next) => {
   const header = decodeProtectedHeader(token);
   const decoded = decodeJwt(token);
 
-  console.log('TOKEN HEADER:', header);
-  console.log('TOKEN ISSUER:', decoded.iss);
-  console.log('TOKEN AUDIENCE:', decoded.aud);
-  console.log('TOKEN VERSION:', decoded.ver);
-
   try {
     const { payload } = await jwtVerify(token, jwks, {
       issuer,
