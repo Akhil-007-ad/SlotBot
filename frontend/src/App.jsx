@@ -122,63 +122,17 @@ const App = () => {
       setLoginLoading(true);
       setLoginError(null);
 
-      /*
-       * Normal browser login.
-       */
       if (!isInTeams) {
-        await instance.loginRedirect(
-          loginRequest
-        );
-
+        await instance.loginRedirect(loginRequest);
         return;
       }
 
+      await authentication.authenticate({
+        url: `${window.location.origin}?teamsAuth=true`,
+        width: 600,
+        height: 535,
+      });
 
-      /*
-       * Microsoft Teams login.
-       *
-       * Save a flag before opening the popup.
-       *
-       * We do this because Microsoft Entra will
-       * redirect back to the existing root URI:
-       *
-       * https://slot-bot-xi.vercel.app
-       *
-       * and we do not want to add another
-       * redirect URI.
-       */
-      localStorage.setItem(
-        'slotbot_teams_auth_in_progress',
-        'true'
-      );
-
-
-      /*
-       * Teams opens a managed authentication popup.
-       */
-      const result =
-        await authentication.authenticate({
-          url:
-            `${window.location.origin}` +
-            '?teamsAuth=true',
-
-          width: 600,
-          height: 535,
-        });
-
-      console.log(
-        'Teams authentication completed:',
-        result
-      );
-
-
-      /*
-       * Authentication completed.
-       *
-       * Reload the main Teams tab so MSAL
-       * initializes again and reads the
-       * authenticated account.
-       */
       window.location.reload();
 
     } catch (error) {
@@ -187,19 +141,14 @@ const App = () => {
         error
       );
 
-      localStorage.removeItem(
-        'slotbot_teams_auth_in_progress'
-      );
-
       setLoginError(
         error?.message ||
-          'Microsoft sign-in failed. Please try again.'
+        'Microsoft sign-in failed. Please try again.'
       );
     } finally {
       setLoginLoading(false);
     }
   };
-
 
   /*
    * Authenticated backend API helper.

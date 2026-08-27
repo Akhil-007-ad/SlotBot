@@ -9,11 +9,14 @@ import App from './App.jsx';
 import {
   authReady,
   msalInstance,
+  loginRequest,
 } from './authConfig.js';
+
 
 const root = createRoot(
   document.getElementById('root')
 );
+
 
 const render = (content) => {
   root.render(
@@ -24,13 +27,31 @@ const render = (content) => {
 };
 
 
+/*
+ * Check whether this window was opened by
+ * Microsoft Teams as an authentication popup.
+ */
+const searchParams = new URLSearchParams(
+  window.location.search
+);
+
+const isTeamsAuthPopup =
+  searchParams.get('teamsAuth') === 'true';
+
+
+const renderAuthMessage = (message) => {
+  render(
+    <main className="configuration-message">
+      {message}
+    </main>
+  );
+};
+
+
 const startApplication = async () => {
   if (!authReady || !msalInstance) {
-    render(
-      <main className="configuration-message">
-        Microsoft Entra ID has not been configured.
-        Add the required environment variables.
-      </main>
+    renderAuthMessage(
+      'Microsoft Entra ID has not been configured.'
     );
 
     return;
@@ -39,13 +60,62 @@ const startApplication = async () => {
   try {
     await msalInstance.initialize();
 
-    const isTeamsAuthPopup =
-      localStorage.getItem(
-        'slotbot_teams_auth_in_progress'
+
+    /*
+     * =====================================================
+     * TEAMS AUTHENTICATION POPUP
+     * =====================================================
+     *
+     * IMPORTANT:
+     * Never render <App /> inside this context.
+     */
+    if (isTeamsAuthPopup) {
+
+      /*
+       * Save this information so that when Microsoft Entra
+       * redirects back to the root URL, we still know this
+       * window belongs to the Teams authentication flow.
+       */
+      sessionStorage.setItem(
+        'slotbot_teams_auth_popup',
+        'true'
+      );
+
+
+      renderAuthMessage(
+        'Opening Microsoft sign-in...'
+      );
+
+
+      /*
+       * Start Microsoft Entra login.
+       *
+       * The redirect URI remains your existing root URL.
+       */
+      await msalInstance.loginRedirect(
+        loginRequest
+      );
+
+      return;
+    }
+
+
+    /*
+     * Check whether this window returned from Microsoft Entra
+     * as the Teams authentication popup.
+     */
+    const isTeamsAuthReturn =
+      sessionStorage.getItem(
+        'slotbot_teams_auth_popup'
       ) === 'true';
 
+
+    /*
+     * Process Microsoft Entra redirect response.
+     */
     const redirectResponse =
       await msalInstance.handleRedirectPromise();
+
 
     if (redirectResponse?.account) {
       msalInstance.setActiveAccount(
@@ -55,17 +125,16 @@ const startApplication = async () => {
 
 
     /*
-     * This window is the Teams authentication popup.
-     *
-     * Complete authentication and tell Teams
-     * to close the popup.
+     * =====================================================
+     * TEAMS AUTHENTICATION COMPLETED
+     * =====================================================
      */
     if (
-      isTeamsAuthPopup &&
+      isTeamsAuthReturn &&
       redirectResponse?.account
     ) {
-      localStorage.removeItem(
-        'slotbot_teams_auth_in_progress'
+      sessionStorage.removeItem(
+        'slotbot_teams_auth_popup'
       );
 
       await authentication.notifySuccess(
@@ -77,7 +146,9 @@ const startApplication = async () => {
 
 
     /*
-     * Normal SlotBot application.
+     * =====================================================
+     * NORMAL SLOTBOT APPLICATION
+     * =====================================================
      */
     render(
       <MsalProvider instance={msalInstance}>
@@ -87,40 +158,38 @@ const startApplication = async () => {
 
   } catch (error) {
     console.error(
-      'MSAL initialization failed:',
+      'Authentication initialization failed:',
       error
     );
 
-    const isTeamsAuthPopup =
-      localStorage.getItem(
-        'slotbot_teams_auth_in_progress'
+    const isTeamsAuthReturn =
+      sessionStorage.getItem(
+        'slotbot_teams_auth_popup'
       ) === 'true';
 
-    if (isTeamsAuthPopup) {
+    if (isTeamsAuthReturn || isTeamsAuthPopup) {
       try {
-        localStorage.removeItem(
-          'slotbot_teams_auth_in_progress'
+        sessionStorage.removeItem(
+          'slotbot_teams_auth_popup'
         );
 
         await authentication.notifyFailure(
           error?.message ||
-            'Microsoft authentication failed.'
+          'Microsoft sign-in failed.'
         );
 
         return;
       } catch (teamsError) {
         console.error(
-          'Unable to notify Teams:',
+          'Unable to notify Microsoft Teams:',
           teamsError
         );
       }
     }
 
-    render(
-      <main className="configuration-message">
-        Microsoft Entra ID could not be initialized.
-        Check the Entra configuration and redirect URI.
-      </main>
+
+    renderAuthMessage(
+      'Microsoft Entra ID could not be initialized. Check the Entra configuration.'
     );
   }
 };
