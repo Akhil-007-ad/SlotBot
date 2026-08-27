@@ -41,12 +41,6 @@ const Loading = () => {
         <p className="text-slate-400 text-sm mb-8">
           Preparing your workspace...
         </p>
-
-        {/* Loading Bar */}
-        <div className="w-72 h-2 bg-slate-800 rounded-full overflow-hidden">
-          <div className="h-full w-1/2 rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-500 animate-loading-bar" />
-        </div>
-
         {/* Loading Dots */}
         <div className="flex items-center gap-2 mt-5">
           <span className="w-2 h-2 bg-cyan-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
