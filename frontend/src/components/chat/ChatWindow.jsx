@@ -79,14 +79,17 @@ const ConflictResolutionCard = ({ bookingData, onSendMessage, onCancel }) => {
   );
 };
 
-const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooking, onCancelBooking, apiFetch }) => {
+const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooking, onCancelBooking, apiFetch, isAdmin }) => {
   const [inputValue, setInputValue] = useState('');
-  const [employees, setEmployees] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
+  const [mentionQuery, setMentionQuery] = useState(null);
+  const [employeeSearchLoading, setEmployeeSearchLoading] = useState(false);
+  const [employeeSearchError, setEmployeeSearchError] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [mentionTriggerIndex, setMentionTriggerIndex] = useState(-1);
   const [selectedRoomName, setSelectedRoomName] = useState(null);
+  const [selectedDate, setSelectedDate] = useState('');
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -100,54 +103,46 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
     }
   }, [session]);
 
-  // Load employee directory
-  // Load employee directory / people suggestions
+  // Outlook-style server-side people search. Searching on the backend avoids
+  // limiting mentions to the first page of directory users.
   useEffect(() => {
-    if (!apiFetch) return;
+    if (!apiFetch || mentionQuery === null) return;
 
-    const loadEmployees = async () => {
+    let active = true;
+    const timer = setTimeout(async () => {
+      setEmployeeSearchLoading(true);
+      setEmployeeSearchError('');
+
       try {
-        const res = await apiFetch('/api/chat/employees');
-
-        if (!res.ok) {
-          throw new Error(
-            `Employee search request failed with status ${res.status}`
-          );
-        }
-
+        const res = await apiFetch(`/api/chat/employees?q=${encodeURIComponent(mentionQuery)}`);
         const data = await res.json();
 
-        // console.log('Employee search response:', data);
+        if (!res.ok) {
+          throw new Error(data.error || `Directory search failed (${res.status})`);
+        }
 
-        // Backend returns:
-        // {
-        //   success: true,
-        //   source: 'directory' | 'people',
-        //   employees: [...]
-        // }
         const employeeList = Array.isArray(data)
           ? data
           : (data.employees || []);
-
-        setEmployees(employeeList);
-
-        // console.log(
-        //   `Loaded ${employeeList.length} employees from ${Array.isArray(data) ? 'legacy-array-response' : data.source
-        //   }`
-        // );
-
+        if (active) {
+          setSuggestions(employeeList);
+          setActiveSuggestionIndex(0);
+        }
       } catch (err) {
-        console.error(
-          'Failed to load employees for autocomplete:',
-          err
-        );
-
-        setEmployees([]);
+        if (active) {
+          setSuggestions([]);
+          setEmployeeSearchError(err.message);
+        }
+      } finally {
+        if (active) setEmployeeSearchLoading(false);
       }
-    };
+    }, 250);
 
-    loadEmployees();
-  }, [apiFetch]);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [apiFetch, mentionQuery]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -163,6 +158,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
     onSendMessage(inputValue.trim());
     setInputValue('');
     setShowSuggestions(false);
+    setMentionQuery(null);
   };
 
   const handleSuggestionClick = (suggestion) => {
@@ -176,13 +172,9 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
     const lastAtIdx = val.lastIndexOf('@');
     if (lastAtIdx !== -1) {
       const afterAt = val.substring(lastAtIdx + 1);
-      if (!afterAt.includes(' ') && !afterAt.includes(',')) {
-        const query = afterAt.toLowerCase();
-        const filtered = employees.filter(emp =>
-          emp.name.toLowerCase().includes(query) ||
-          emp.email.toLowerCase().includes(query)
-        );
-        setSuggestions(filtered);
+      if (!afterAt.includes(',')) {
+        const query = afterAt.trim();
+        setMentionQuery(query);
         setShowSuggestions(true);
         setMentionTriggerIndex(lastAtIdx);
         setActiveSuggestionIndex(0);
@@ -191,6 +183,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
     }
     setShowSuggestions(false);
     setSuggestions([]);
+    setMentionQuery(null);
   };
 
   const selectSuggestion = (employee) => {
@@ -199,6 +192,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
     setInputValue(newVal);
     setShowSuggestions(false);
     setSuggestions([]);
+    setMentionQuery(null);
     inputRef.current?.focus();
   };
 
@@ -215,6 +209,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         selectSuggestion(suggestions[activeSuggestionIndex]);
       } else if (e.key === 'Escape') {
         setShowSuggestions(false);
+        setMentionQuery(null);
       }
     }
   };
@@ -224,7 +219,22 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
 
   // Disable normal text input when selecting a room or acting on cards
   const showRoomCardsStep = session?.step === 'AWAITING_ROOM_SELECTION';
+  const isAwaitingDate = session?.expectedField === 'date';
   const disableInput = showConfirmationCard || showConflictCard || showRoomCardsStep;
+
+  const formatDateInput = date => [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-');
+  const minimumDate = formatDateInput(new Date());
+  const maximumDateValue = new Date();
+  maximumDateValue.setDate(maximumDateValue.getDate() + (isAdmin ? 7 : 1));
+  const maximumDate = formatDateInput(maximumDateValue);
+
+  useEffect(() => {
+    if (!isAwaitingDate) setSelectedDate('');
+  }, [isAwaitingDate]);
 
   // Track the last bot message to allow room selections only on the latest query
   const botMessages = messages.filter(m => m.sender === 'bot');
@@ -240,7 +250,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         </div>
         <div>
           <h2 className="text-base font-bold text-slate-900">SlotBot Assistant</h2>
-          <p className="text-xs text-emerald-600">● Online | Today-Only Bookings</p>
+          <p className="text-xs text-emerald-600">● Online | Today, Tomorrow &amp; Admin Advance Bookings</p>
         </div>
       </div>
 
@@ -344,8 +354,11 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
       </div>
 
       {/* Floating Suggestions List */}
-      {showSuggestions && suggestions.length > 0 && (
+      {showSuggestions && (
         <div className="absolute left-5 bottom-17.5 w-[calc(100%-40px)] max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-[0_10px_25px_rgba(0,0,0,0.15)] z-30 divide-y divide-slate-100 animate-fade-in">
+          <div className="sticky top-0 flex items-center justify-between bg-slate-50 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            <span>People</span><span>{employeeSearchLoading ? 'Searching…' : `${suggestions.length} result${suggestions.length === 1 ? '' : 's'}`}</span>
+          </div>
           {suggestions.map((emp, idx) => (
             <div
               key={emp.email}
@@ -356,19 +369,22 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
               ].join(' ')}
             >
               <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs shrink-0">
-                {emp.name.charAt(0).toUpperCase()}
+                {(emp.name || emp.email || '?').split(/\s+/).slice(0, 2).map(part => part.charAt(0).toUpperCase()).join('')}
               </div>
               <div className="flex flex-col">
                 <span className="text-xs font-semibold">{emp.name}</span>
                 <span className="text-[10px] text-slate-500">{emp.email}</span>
+                {emp.department && <span className="text-[10px] text-slate-400">{emp.department}</span>}
               </div>
             </div>
           ))}
+          {!employeeSearchLoading && !suggestions.length && !employeeSearchError && <div className="px-4 py-5 text-center text-xs text-slate-500">No people found. Try a name or email address.</div>}
+          {employeeSearchError && <div className="px-4 py-4 text-xs text-red-700">{employeeSearchError}</div>}
         </div>
       )}
 
       {/* Quick Suggestions */}
-      {!disableInput && (
+      {!disableInput && !isAwaitingDate && (
         <div className="flex justify-between flex-wrap gap-2 px-5 py-2 border border-slate-200/70 rounded-[30px] mx-3 mb-2 shrink-0">
           {QUICK_SUGGESTIONS.map((s, i) => (
             <button
@@ -382,8 +398,39 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         </div>
       )}
 
+      {isAwaitingDate && (
+        <form
+          onSubmit={event => {
+            event.preventDefault();
+            if (selectedDate) onSendMessage(selectedDate);
+          }}
+          className="mx-4 mb-3 flex flex-wrap items-end gap-3 rounded-xl border border-violet-200 bg-violet-50 p-4"
+        >
+          <label className="min-w-56 flex-1">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-violet-800">📅 Select booking date</span>
+            <input
+              type="date"
+              required
+              min={minimumDate}
+              max={maximumDate}
+              value={selectedDate}
+              onChange={event => setSelectedDate(event.target.value)}
+              className="w-full rounded-lg border border-violet-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+            />
+            <span className="mt-1 block text-xs text-slate-500">Choose between {minimumDate} and {maximumDate}.</span>
+          </label>
+          <button
+            type="submit"
+            disabled={!selectedDate || isTyping}
+            className="rounded-lg bg-violet-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Continue
+          </button>
+        </form>
+      )}
+
       {/* Input Form */}
-      <form
+      {!isAwaitingDate && <form
         onSubmit={handleSubmit}
         className="flex gap-2.5 items-center px-5 py-4 border-t border-slate-200 bg-white shrink-0"
       >
@@ -422,7 +469,7 @@ const ChatWindow = ({ messages, isTyping, onSendMessage, session, onConfirmBooki
         >
           Send
         </button>
-      </form>
+      </form>}
     </div>
   );
 };

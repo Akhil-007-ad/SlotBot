@@ -1,5 +1,5 @@
 import { isMS365Enabled } from './graphService.js';
-import { OnBehalfOfCredential } from '@azure/identity';
+import { ClientSecretCredential, OnBehalfOfCredential } from '@azure/identity';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { TokenCredentialAuthenticationProvider } from '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js';
 
@@ -25,6 +25,18 @@ const buildUserGraphClient = (userAccessToken) => {
     }
   );
 
+  return Client.initWithMiddleware({ authProvider });
+};
+
+const buildApplicationGraphClient = () => {
+  const credential = new ClientSecretCredential(
+    process.env.MS_TENANT_ID,
+    process.env.MS_CLIENT_ID,
+    process.env.MS_CLIENT_SECRET
+  );
+  const authProvider = new TokenCredentialAuthenticationProvider(credential, {
+    scopes: ['https://graph.microsoft.com/.default']
+  });
   return Client.initWithMiddleware({ authProvider });
 };
 
@@ -75,33 +87,69 @@ const normalizeQuery = (query) => {
  * Requires:
  * Microsoft Graph → Delegated → User.Read.All
  */
-const searchOrganizationUsers = async (client, query) => {
-  const escapedQuery = query.replace(/'/g, "''");
+const searchOrganizationUsersWithClient = async (client, query, top = 10, allPages = false) => {
+  const escapedQuery = query.replace(/["\\]/g, character => `\\${character}`);
 
   const request = client
     .api('/users')
-    .select('displayName,userPrincipalName,mail,department')
-    .top(10);
+    .select('id,displayName,userPrincipalName,mail,department')
+    .top(top);
 
   if (query) {
-    const filterClause =
-      `startswith(displayName,'${escapedQuery}') or ` +
-      `startswith(userPrincipalName,'${escapedQuery}') or ` +
-      `startswith(mail,'${escapedQuery}')`;
-
-    request.filter(filterClause);
+    request
+      .header('ConsistencyLevel', 'eventual')
+      .search(
+        `"displayName:${escapedQuery}" OR ` +
+        `"mail:${escapedQuery}" OR ` +
+        `"userPrincipalName:${escapedQuery}"`
+      );
   }
 
-  const response = await request.get();
+  let response = await request.get();
+  const directoryUsers = [...(response.value || [])];
 
-  return (response.value || [])
+  while (allPages && response['@odata.nextLink']) {
+    response = await client.api(response['@odata.nextLink']).get();
+    directoryUsers.push(...(response.value || []));
+  }
+
+  return directoryUsers
     .map((user) => ({
+      id: user.id,
       name: user.displayName || '',
       email: user.mail || user.userPrincipalName || '',
       department: user.department || '',
       source: 'directory'
     }))
     .filter((user) => user.name || user.email);
+};
+
+export const searchOrganizationUsers = async (query, userAccessToken) => {
+  if (!isMS365Enabled()) {
+    const error = new Error('Microsoft 365 organization search is currently disabled.');
+    error.status = 503;
+    throw error;
+  }
+  if (!userAccessToken) {
+    const error = new Error('A real Microsoft authentication token is required for organization search.');
+    error.status = 401;
+    throw error;
+  }
+  try {
+    return await searchOrganizationUsersWithClient(
+      buildUserGraphClient(userAccessToken),
+      normalizeQuery(query),
+      999,
+      true
+    );
+  } catch (error) {
+    if (isInsufficientPrivilegesError(error)) {
+      const permissionError = new Error('Microsoft Graph User.Read.All permission is required to manage organization users.');
+      permissionError.status = 403;
+      throw permissionError;
+    }
+    throw error;
+  }
 };
 
 
@@ -197,17 +245,9 @@ export const searchEmployees = async (query, userAccessToken) => {
   // Requires User.Read.All
   // =====================================================
   try {
-    console.log(
-      '[Employee Search] Priority 1: Searching organization directory'
-    );
-
-    const users = await searchOrganizationUsers(
+    const users = await searchOrganizationUsersWithClient(
       client,
       searchQuery
-    );
-
-    console.log(
-      `[Employee Search] Directory search successful. Found ${users.length} user(s).`
     );
 
     return {
@@ -217,11 +257,6 @@ export const searchEmployees = async (query, userAccessToken) => {
     };
 
   } catch (directoryError) {
-    console.warn(
-      '[Employee Search] Directory search failed:',
-      directoryError.message
-    );
-
     // Only fall back to People.Read when the directory
     // request failed because User.Read.All is unavailable.
     if (!isInsufficientPrivilegesError(directoryError)) {
@@ -230,28 +265,33 @@ export const searchEmployees = async (query, userAccessToken) => {
       );
     }
 
-    console.log(
-      '[Employee Search] User.Read.All unavailable. Falling back to People.Read.'
-    );
   }
+
+  // =====================================================
+  // PRIORITY 2: APPLICATION DIRECTORY SEARCH
+  // Requires application User.Read.All + admin consent.
+  // =====================================================
+  try {
+    const users = await searchOrganizationUsersWithClient(
+      buildApplicationGraphClient(),
+      searchQuery
+    );
+    return {
+      success: true,
+      source: 'directory-application',
+      results: users
+    };
+  } catch {}
 
 
   // =====================================================
-  // PRIORITY 2: RELEVANT PEOPLE SEARCH
+  // PRIORITY 3: RELEVANT PEOPLE SEARCH
   // Requires People.Read
   // =====================================================
   try {
-    console.log(
-      '[Employee Search] Priority 2: Searching relevant people'
-    );
-
     const people = await searchRelevantPeople(
       client,
       searchQuery
-    );
-
-    console.log(
-      `[Employee Search] People search successful. Found ${people.length} person(s).`
     );
 
     return {
@@ -260,12 +300,7 @@ export const searchEmployees = async (query, userAccessToken) => {
       results: people
     };
 
-  } catch (peopleError) {
-    console.error(
-      '[Employee Search] People search also failed:',
-      peopleError.message
-    );
-
+  } catch {
     // =====================================================
     // PRIORITY 3: ACTUAL ERROR
     // No mock employee fallback.

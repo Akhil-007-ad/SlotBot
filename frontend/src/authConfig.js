@@ -2,15 +2,14 @@ import { PublicClientApplication } from '@azure/msal-browser';
 
 const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID;
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID;
-
-export const devAuthEnabled =
-    import.meta.env.VITE_DEV_AUTH === 'true';
+const apiScope = import.meta.env.VITE_ENTRA_API_SCOPE;
+const applicationUrl = import.meta.env.VITE_REDIRECT_URI || window.location.origin;
 
 export const entraConfigured =
-    Boolean(clientId && tenantId);
+    Boolean(clientId && tenantId && apiScope);
 
 export const authReady =
-    entraConfigured || devAuthEnabled;
+    entraConfigured;
 
 export const msalInstance = authReady
     ? new PublicClientApplication({
@@ -23,11 +22,9 @@ export const msalInstance = authReady
                 `https://login.microsoftonline.com/${tenantId || 'common'
                 }`,
 
-            redirectUri:
-                'http://localhost:5173',
+            redirectUri: applicationUrl,
 
-            postLogoutRedirectUri:
-                'http://localhost:5173'
+            postLogoutRedirectUri: applicationUrl
         },
 
         cache: {
@@ -49,5 +46,5 @@ export const loginRequest = {
 };
 
 export const apiRequest = {
-    scopes: [import.meta.env.VITE_ENTRA_API_SCOPE]
+    scopes: [apiScope]
 };

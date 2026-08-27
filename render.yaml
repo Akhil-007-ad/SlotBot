@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: slotbot-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 15
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "true"
+      - key: JSON_BODY_LIMIT
+        value: 100kb
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "900000"
+      - key: RATE_LIMIT_MAX
+        value: "300"
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: ENTRA_TENANT_ID
+        sync: false
+      - key: ENTRA_API_CLIENT_ID
+        sync: false
+      - key: INITIAL_ADMIN_EMAILS
+        sync: false
+      - key: MS365_ENABLED
+        sync: false
+      - key: MS_TENANT_ID
+        sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MS_TIMEZONE
+        sync: false

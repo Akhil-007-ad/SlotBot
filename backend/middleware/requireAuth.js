@@ -1,5 +1,6 @@
-import { createRemoteJWKSet, jwtVerify,decodeProtectedHeader, decodeJwt } from 'jose';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import '../config/env.js';
+import User from '../models/User.js';
 
 const tenantId = process.env.ENTRA_TENANT_ID;
 const apiClientId = process.env.ENTRA_API_CLIENT_ID;
@@ -13,20 +14,47 @@ const jwks = tenantId
 
 export const isEntraConfigured = () => Boolean(tenantId && apiClientId);
 
-export const requireAuth = async (req, res, next) => {
-  // ─── Dev bypass ──────────────────────────────────────────────────────────────
-  if (process.env.ALLOW_DEV_AUTH === 'true' && process.env.NODE_ENV !== 'production') {
-    req.user = {
-      id:          process.env.DEV_USER_ID         || 'local-development-user',
-      email:       process.env.DEV_USER_EMAIL       || 'developer@example.com',
-      name:        process.env.DEV_USER_NAME        || 'Local Developer',
-      department:  process.env.DEV_USER_DEPARTMENT  || '',
-      // No real token in dev mode — Graph calls are skipped when MS365_ENABLED=false
-      accessToken: null
-    };
-    return next();
+const initialAdminEmails = new Set(
+  String(process.env.INITIAL_ADMIN_EMAILS || '')
+    .split(',')
+    .map(email => email.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+const attachLocalUser = async (req, identity, next) => {
+  const normalizedEmail = identity.email?.toLowerCase() || null;
+  let existing = await User.findOne({ entraId: identity.id });
+  const emailUser = normalizedEmail
+    ? await User.findOne({ email: normalizedEmail })
+    : null;
+
+  if (existing && emailUser && !existing._id.equals(emailUser._id)) {
+    existing.isAdmin = existing.isAdmin || emailUser.isAdmin;
+    await User.deleteOne({ _id: emailUser._id });
+  } else if (!existing && emailUser) {
+    existing = emailUser;
   }
 
+  const user = existing || new User({
+    entraId: identity.id,
+    isAdmin: Boolean(normalizedEmail && initialAdminEmails.has(normalizedEmail))
+  });
+
+  user.entraId = identity.id;
+  user.email = normalizedEmail;
+  user.name = identity.name;
+  user.department = identity.department;
+  await user.save();
+
+  req.user = {
+    ...identity,
+    isAdmin: user.isAdmin,
+    localUserId: user.id
+  };
+  next();
+};
+
+export const requireAuth = async (req, res, next) => {
   if (!isEntraConfigured()) {
     return res.status(503).json({ error: 'Microsoft Entra ID is not configured on this server.' });
   }
@@ -34,18 +62,15 @@ export const requireAuth = async (req, res, next) => {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) return res.status(401).json({ error: 'A Microsoft Entra access token is required.' });
 
-  const header = decodeProtectedHeader(token);
-  const decoded = decodeJwt(token);
-
   try {
     const { payload } = await jwtVerify(token, jwks, {
       issuer,
       audience: [apiClientId, `api://${apiClientId}`]
     });
 
-    req.user = {
+    const identity = {
       id:          payload.oid          || payload.sub,
-      email:       payload.preferred_username || payload.email || null,
+      email:       payload.preferred_username || payload.email || payload.upn || null,
       name:        payload.name         || payload.preferred_username || 'SlotBot user',
       // 'department' is an optional claim — must be configured in the Azure app manifest
       // App Registration → Token configuration → Add optional claim → Access token → department
@@ -53,9 +78,8 @@ export const requireAuth = async (req, res, next) => {
       // Forward the raw bearer token so Graph OBO calls can use it
       accessToken: token
     };
-    next();
-  } catch (error) {
-    console.error('Entra token validation failed:', error.code || error.message);
+    await attachLocalUser(req, identity, next);
+  } catch {
     res.status(401).json({ error: 'Your Microsoft Entra session is invalid or has expired.' });
   }
 };

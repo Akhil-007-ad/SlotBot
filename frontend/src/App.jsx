@@ -1,19 +1,22 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useMsal } from '@azure/msal-react';
-import ChatWindow from './components/chat/ChatWindow';
-import RoomDashboard from './components/RoomDashboard';
 import { loginRequest, apiRequest } from './authConfig';
 import NavBar from './components/NavBar';
 
-import {Route,Routes,BrowserRouter} from 'react-router-dom'
-import HomePage from './pages/HomePage';
-import HistoryPage from './pages/HistoryPage';
-import AdminPage from './pages/AdminPage';
+import {Navigate, Route, Routes, BrowserRouter} from 'react-router-dom'
+const HomePage = lazy(() => import('./pages/HomePage'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage'));
+const AdminPage = lazy(() => import('./pages/AdminPage'));
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5001';
+const configuredApiBase = import.meta.env.VITE_API_BASE;
+const API_BASE = configuredApiBase === undefined
+  ? 'http://localhost:5001'
+  : configuredApiBase.replace(/\/$/, '');
 
 const App = () => {
   const { instance, accounts } = useMsal();
+  const [currentUser, setCurrentUser] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
 
   const account = useMemo(() => {
     return (
@@ -21,6 +24,25 @@ const App = () => {
       
     );
   }, [accounts]);
+
+  const apiFetch = useCallback(async (path, options = {}) => {
+    if (!account) throw new Error('No Microsoft account is signed in.');
+    const token = await instance.acquireTokenSilent({ ...apiRequest, account });
+    const headers = new Headers(options.headers);
+    headers.set('Authorization', `Bearer ${token.accessToken}`);
+    return fetch(`${API_BASE}${path}`, { ...options, headers });
+  }, [account, instance]);
+
+  useEffect(() => {
+    if (!account) return;
+    setProfileLoading(true);
+    apiFetch('/api/users/me')
+      .then(async response => {
+        if (!response.ok) throw new Error('Unable to load your SlotBot profile.');
+        setCurrentUser(await response.json());
+      })
+      .finally(() => setProfileLoading(false));
+  }, [account, apiFetch]);
 
   if (!account) {
     return (
@@ -48,14 +70,16 @@ const App = () => {
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 font-[Plus_Jakarta_Sans,sans-serif]">
       <BrowserRouter>
-        <NavBar account={account} instance={instance}/>
+        <NavBar account={account} instance={instance} isAdmin={currentUser?.isAdmin}/>
 
         
-          <Routes>
-            <Route path='/' element={<HomePage account={account} instance={instance}/>}/>
-            <Route path='/history' element={<HistoryPage/>}/>
-            <Route path='/admin' element={<AdminPage/>}/>
-          </Routes>
+          <Suspense fallback={<PageLoading/>}>
+            <Routes>
+              <Route path='/' element={<HomePage account={account} apiFetch={apiFetch} currentUser={currentUser}/>}/>
+              <Route path='/history' element={<HistoryPage apiFetch={apiFetch} currentUser={currentUser}/>}/>
+              <Route path='/admin' element={profileLoading ? <PageLoading/> : currentUser?.isAdmin ? <AdminPage apiFetch={apiFetch}/> : <Navigate to='/' replace/>}/>
+            </Routes>
+          </Suspense>
       
       </BrowserRouter>
 
@@ -63,5 +87,9 @@ const App = () => {
     </div>
   );
 };
+
+const PageLoading = () => (
+  <main className="flex flex-1 items-center justify-center text-slate-500">Loading…</main>
+);
 
 export default App;

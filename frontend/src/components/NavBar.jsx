@@ -1,7 +1,7 @@
 import React from 'react'
 import { VscSignOut } from "react-icons/vsc";
 import { NavLink } from 'react-router-dom';
-const NavBar = ({ account, instance }) => {
+const NavBar = ({ account, instance, isAdmin }) => {
     const navItems = [
         {
             id: 1,
@@ -13,11 +13,11 @@ const NavBar = ({ account, instance }) => {
             name: "History",
             path: "/history"
         },
-        {
+        ...(isAdmin ? [{
             id: 3,
             name: "Admin",
             path: "/admin"
-        }
+        }] : [])
 
     ]
     return (

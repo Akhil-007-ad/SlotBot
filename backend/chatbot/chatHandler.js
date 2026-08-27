@@ -36,6 +36,12 @@ const getToday = () => {
   return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
 };
 
+const addDays = (dateString, days) => {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+};
+
 const formatTime = value => {
   if (!value) return '';
   const date = new Date(`2000-01-01T${value}`);
@@ -54,14 +60,15 @@ const roomDto = room => ({
 const resetSession = () => ({
   step: STATES.COLLECTING_DETAILS,
   expectedField: EXPECTED_FIELDS.ATTENDEE_COUNT,
-  bookingData: { ...emptyBookingState() }
+  bookingData: { ...emptyBookingState(), date: null }
 });
 
-const ensureTodaySession = session => {
+const ensureBookingSession = session => {
   const nextSession = createBookingSession(session);
-  const today = getToday();
   if (!nextSession.bookingData) nextSession.bookingData = emptyBookingState();
-  nextSession.bookingData.date = today;
+  if (!session?.bookingData || !Object.prototype.hasOwnProperty.call(session.bookingData, 'date')) {
+    nextSession.bookingData.date = null;
+  }
   return nextSession;
 };
 
@@ -114,8 +121,17 @@ const searchRooms = async (rooms, state, findOverlap, { explain = false } = {}) 
 
   const availableRooms = [];
   const rejectedRooms = [];
+  const tomorrow = addDays(getToday(), 1);
 
   for (const room of rooms) {
+
+    if (state.date > tomorrow && room.hasPrivilegeToBookAWeekPrior !== true) {
+      rejectedRooms.push({
+        room,
+        reason: 'Only advance-booking rooms are available beyond tomorrow.'
+      });
+      continue;
+    }
 
     // 1. Capacity check
     if (Number(room.capacity || 0) < Number(state.attendeeCount)) {
@@ -206,21 +222,12 @@ const checkParticipantConflicts = async ({
   }
 
   try {
-    console.log('\n========== PEOPLE CALENDAR CHECK ==========');
-    console.log('People being checked:', participants);
-    console.log('Start:', startTime);
-    console.log('End:', endTime);
-    console.log('Access token exists:', !!accessToken);
-
     const unavailableEmails = await checkParticipantAvailability(
       participants,
       startTime,
       endTime,
       accessToken
     );
-
-    console.log('Unavailable people:', unavailableEmails);
-    console.log('============================================\n');
 
     return unavailableEmails.map(email => ({
       email,
@@ -316,9 +323,11 @@ export const createChatHandler = ({
 } = {}) => async (message, session, user) => {
 
   const cleanMessage = String(message || '').trim();
-  const nextSession = ensureTodaySession(session);
+  const nextSession = ensureBookingSession(session);
   const state = nextSession.bookingData;
   const today = getToday();
+  const tomorrow = addDays(today, 1);
+  const oneWeekFromToday = addDays(today, 7);
 
   if (!cleanMessage) return { reply: 'Please provide the booking details.', session: nextSession };
   if (isCancelMessage(cleanMessage)) return { reply: 'Booking cancelled. Start a new request whenever you are ready.', session: resetSession() };
@@ -329,14 +338,6 @@ export const createChatHandler = ({
   // Parse whole message
   const extracted = extractBookingDetails(cleanMessage, rooms, state, nextSession.expectedField);
 
-  console.log('\n========== SLOTBOT DEBUG ==========');
-  console.log('MESSAGE          :', cleanMessage);
-  console.log('STEP (incoming)  :', nextSession.step);
-  console.log('EXPECTED FIELD   :', nextSession.expectedField);
-  console.log('STATE (before)   :', JSON.stringify(state));
-  console.log('EXTRACTED FIELDS :', JSON.stringify(extracted));
-  console.log('====================================\n');
-
   // If we were awaiting a decision, parse it specifically
   if (nextSession.step === STATES.AWAITING_CONFLICT_DECISION) {
     const decision = parseConflictDecision(cleanMessage);
@@ -346,21 +347,68 @@ export const createChatHandler = ({
     if (confirm !== null) extracted.confirmation = confirm;
   }
 
-  // Reject past dates gracefully
-  if (extracted.date && extracted.date !== today) {
+  const latestAllowedDate = user?.isAdmin ? oneWeekFromToday : tomorrow;
+  if (extracted.date && (extracted.date < today || extracted.date > latestAllowedDate)) {
     nextSession.step = STATES.COLLECTING_DETAILS;
     nextSession.expectedField = EXPECTED_FIELDS.START_TIME;
     return {
-      reply: '⚠️ SlotBot currently supports bookings only for the remaining time slots today. Please provide a future time for today.',
+      reply: user?.isAdmin
+        ? '⚠️ Admin advance bookings are allowed only through seven days from today. Please choose a date within that range.'
+        : '⚠️ SlotBot supports bookings for today or tomorrow only. Which of those days would you like?',
       session: nextSession
     };
   }
 
   // Merge extracted values
+  const dateChanged = Boolean(extracted.date && extracted.date !== state.date);
+  const attendeeCountChanged = Boolean(
+    extracted.attendeeCount != null && extracted.attendeeCount !== state.attendeeCount
+  );
+
+  // Teammates may be entered one at a time. Preserve already collected
+  // addresses and append the newly extracted addresses. An explicit `none`
+  // remains an empty list rather than restoring earlier entries.
+  if (
+    Array.isArray(extracted.participants) &&
+    extracted.participants.length > 0 &&
+    Array.isArray(state.participants)
+  ) {
+    extracted.participants = [
+      ...state.participants,
+      ...extracted.participants
+    ];
+  }
+
   nextSession.bookingData = mergeBookingState(state, extracted);
   const current = nextSession.bookingData;
 
-  console.log('MERGED STATE      :', JSON.stringify(current));
+  if (attendeeCountChanged && extracted.participants === undefined) {
+    current.participants = null;
+    current.conflicts = null;
+    current.suggestedBooking = null;
+    current.forceBooking = false;
+  }
+
+  if (dateChanged) {
+    current.selectedRoomId = null;
+    current.selectedRoomName = null;
+    current.conflicts = null;
+    current.suggestedBooking = null;
+    current.forceBooking = false;
+  }
+
+  if (!current.date) {
+    nextSession.step = STATES.COLLECTING_DETAILS;
+    nextSession.expectedField = 'date';
+    return {
+      reply: user?.isAdmin
+        ? 'Would you like to book for **today**, **tomorrow**, or another date within the next **7 days**? For example: **next Wednesday** or **02-09-2026**.'
+        : 'Would you like to book the room for **today** or **tomorrow**?',
+      session: nextSession
+    };
+  }
+
+  const bookingDate = current.date || today;
 
   // Validate attendee count
   if (current.attendeeCount !== null && current.attendeeCount !== undefined) {
@@ -379,10 +427,60 @@ export const createChatHandler = ({
     }
   }
 
+  // The organizer is included in attendeeCount automatically and must not be
+  // repeated in the teammate list. Require exactly attendeeCount - 1 unique
+  // teammate addresses before allowing the conversation to continue.
+  if (Array.isArray(current.participants) && current.attendeeCount != null) {
+    const normalizedParticipants = current.participants
+      .map(email => String(email || '').trim().toLowerCase())
+      .filter(Boolean);
+    const uniqueParticipants = [...new Set(normalizedParticipants)];
+    const organizerEmail = String(
+      user?.email || user?.mail || user?.userPrincipalName || ''
+    ).trim().toLowerCase();
+    const requiredTeammates = Math.max(0, current.attendeeCount - 1);
+    const includesOrganizer = Boolean(
+      organizerEmail && uniqueParticipants.includes(organizerEmail)
+    );
+    const hasDuplicates = uniqueParticipants.length !== normalizedParticipants.length;
+    const validParticipants = uniqueParticipants.filter(
+      email => !organizerEmail || email !== organizerEmail
+    );
+
+    current.participants = validParticipants;
+    current.conflicts = null;
+    current.suggestedBooking = null;
+    current.forceBooking = false;
+
+    if (validParticipants.length < requiredTeammates) {
+      nextSession.step = STATES.AWAITING_PARTICIPANTS;
+      nextSession.expectedField = 'participants';
+      const remaining = requiredTeammates - validParticipants.length;
+      const ignored = [
+        includesOrganizer ? 'your own email was ignored because you are counted automatically' : '',
+        hasDuplicates ? 'duplicate emails were ignored' : ''
+      ].filter(Boolean);
+      return {
+        reply: `Stored **${validParticipants.length} of ${requiredTeammates}** teammate email address${requiredTeammates === 1 ? '' : 'es'}. Please add **${remaining} more**${ignored.length ? `. Note: ${ignored.join(' and ')}` : ''}.`,
+        session: nextSession
+      };
+    }
+
+    if (validParticipants.length > requiredTeammates) {
+      current.participants = null;
+      nextSession.step = STATES.AWAITING_PARTICIPANTS;
+      nextSession.expectedField = 'participants';
+      return {
+        reply: `You provided **${validParticipants.length}** unique teammate emails, but only **${requiredTeammates}** are required because you are included automatically. Please enter the correct ${requiredTeammates} email address${requiredTeammates === 1 ? '' : 'es'} again.`,
+        session: nextSession
+      };
+    }
+  }
+
   // Validate times
   if (current.startTime && current.endTime) {
-    const start = toLocalDateTime(today, current.startTime);
-    const end = toLocalDateTime(today, current.endTime);
+    const start = toLocalDateTime(bookingDate, current.startTime);
+    const end = toLocalDateTime(bookingDate, current.endTime);
     if (!start || !end) {
       current.startTime = null; current.endTime = null;
       nextSession.step = STATES.COLLECTING_DETAILS;
@@ -398,7 +496,7 @@ export const createChatHandler = ({
   }
 
   // Check past times
-  if (current.startTime && !isFutureTodayTime(today, current.startTime)) {
+  if (current.startTime && !isFutureTodayTime(bookingDate, current.startTime)) {
     current.startTime = null; current.endTime = null;
     nextSession.step = STATES.COLLECTING_DETAILS;
     nextSession.expectedField = EXPECTED_FIELDS.START_TIME;
@@ -479,15 +577,22 @@ export const createChatHandler = ({
   nextSession.step = nextStateInfo.step;
   nextSession.expectedField = nextStateInfo.expectedField;
 
-  console.log('NEXT STATE        :', nextStateInfo.step, '| action:', nextStateInfo.action, '| expectedField:', nextStateInfo.expectedField);
-  console.log('====================================\n');
-
   // Execute actions based on state transition
   switch (nextStateInfo.action) {
     case 'ASK_QUESTION':
-    case 'ASK_SUBJECT':
-    case 'ASK_DESCRIPTION':
       return { reply: nextStateInfo.question || 'Please provide ' + nextStateInfo.expectedField, session: nextSession };
+
+    case 'ASK_SUBJECT':
+      return {
+        reply: 'What should the **email title** be? For example: **Sprint planning**.',
+        session: nextSession
+      };
+
+    case 'ASK_DESCRIPTION':
+      return {
+        reply: 'Please provide the meeting **agenda**.',
+        session: nextSession
+      };
 
     case 'SHOW_ROOMS': {
       const roomSearch = await searchRooms(
@@ -536,8 +641,11 @@ export const createChatHandler = ({
 
     case 'ASK_PARTICIPANTS':
       const selectedRoom = rooms.find(room => room.id === current.selectedRoomId || room._id?.toString() === String(current.selectedRoomId) || room.name === current.selectedRoomId);
+      const requiredTeammates = Math.max(0, Number(current.attendeeCount || 1) - 1);
       return {
-        reply: 'Who should receive the meeting invitation? Enter teammate email addresses separated by commas, or type **none**.',
+        reply: requiredTeammates === 0
+          ? 'No teammate emails are required because the attendee count is 1. Type **none** to continue.'
+          : `Enter exactly **${requiredTeammates}** teammate email address${requiredTeammates === 1 ? '' : 'es'}, separated by commas. Do **not** include your own email because you are counted automatically. Use **@** to search people.`,
         session: nextSession,
         selectedRoom: selectedRoom ? roomDto(selectedRoom) : undefined
       };
@@ -561,17 +669,13 @@ export const createChatHandler = ({
     !current.forceBooking
   ) {
 
-    console.log(
-      '\n========== CONFLICT CHECK START =========='
-    );
-
     const startTime = toLocalDateTime(
-      today,
+      bookingDate,
       current.startTime
     );
 
     const endTime = toLocalDateTime(
-      today,
+      bookingDate,
       current.endTime
     );
 
@@ -585,16 +689,6 @@ export const createChatHandler = ({
       user?.mail ||
       user?.email ||
       user?.userPrincipalName;
-
-    console.log(
-      'Requester:',
-      requesterEmail
-    );
-
-    console.log(
-      'Teammates:',
-      current.participants
-    );
 
     /*
      * Check requester + teammates together.
@@ -615,11 +709,6 @@ export const createChatHandler = ({
       )
     ];
 
-    console.log(
-      'People being checked:',
-      uniquePeopleToCheck
-    );
-
     /*
      * Check Microsoft 365 calendars.
      */
@@ -630,15 +719,6 @@ export const createChatHandler = ({
       accessToken: user?.accessToken,
       checkParticipantAvailability
     });
-
-    console.log(
-      'Calendar conflicts:',
-      JSON.stringify(conflicts, null, 2)
-    );
-
-    console.log(
-      '========== CONFLICT CHECK END ==========\n'
-    );
 
     /*
      * --------------------------------------------------
@@ -756,7 +836,7 @@ export const createChatHandler = ({
        * No alternative found.
        */
       conflictMessage +=
-        `I could not find another conflict-free slot later today.\n\n`;
+        `I could not find another conflict-free slot later that day.\n\n`;
 
       conflictMessage +=
         `What would you like to do?\n\n`;
@@ -783,10 +863,6 @@ export const createChatHandler = ({
      * --------------------------------------------------
      */
 
-    console.log(
-      '✅ Requester and all teammates are available.'
-    );
-
     /*
      * Empty array means:
      *
@@ -804,9 +880,9 @@ export const createChatHandler = ({
     if (extracted.confirmation === true) {
       // PROCEED TO BOOK
       const room = rooms.find(item => item.id === current.selectedRoomId || item._id?.toString() === String(current.selectedRoomId) || item.name === current.selectedRoomId);
-      const startTime = toLocalDateTime(today, current.startTime);
-      const endTime = toLocalDateTime(today, current.endTime);
-      if (!isFutureTodayTime(today, current.startTime)) {
+      const startTime = toLocalDateTime(bookingDate, current.startTime);
+      const endTime = toLocalDateTime(bookingDate, current.endTime);
+      if (!isFutureTodayTime(bookingDate, current.startTime)) {
         nextSession.step = STATES.COLLECTING_DETAILS;
         nextSession.expectedField = EXPECTED_FIELDS.START_TIME;
         return { reply: '⚠️ That time has already passed. Please provide a new start time.', session: nextSession };
@@ -845,7 +921,7 @@ export const createChatHandler = ({
       const actualAttendees = (current.participants?.length || 0) + 1;
       if (current.attendeeCount != null && actualAttendees !== current.attendeeCount) {
         return {
-          reply: `You originally specified ${current.attendeeCount} attendees, but your participants would make ${actualAttendees} including you. Please update the attendee count or remove participants.`,
+          reply: `You originally specified ${current.attendeeCount} attendees, but your participants would make ${actualAttendees} including you. Please update the attendee count or remove/add participants.`,
           session: nextSession
         };
       }
@@ -879,7 +955,7 @@ export const createChatHandler = ({
         roomName: room.name,
         peopleCount: current.attendeeCount,
         startTime, endTime,
-        date: toLocalDateTime(today, '00:00'),
+        date: toLocalDateTime(bookingDate, '00:00'),
         teammates: current.participants || [],
         subject: current.subject,
         description: current.description
@@ -919,7 +995,7 @@ export const createChatHandler = ({
 
     // Normal confirmation prompt
     return {
-      reply: `✅ Everything looks good.\n\n**Room:** ${current.selectedRoomName}\n**Time:** ${formatTime(current.startTime)} – ${formatTime(current.endTime)}\n**People:** ${current.attendeeCount}\n**TV:** ${current.tvRequired ? 'Yes' : 'No'}\n**Teammates:** ${current.participants && current.participants.length ? current.participants.join(', ') : 'None'}\n**Subject:** ${current.subject}\n**Description:** ${current.description || 'None'}\n\n${current.forceBooking ? '⚠️ **WARNING: Some teammates have calendar conflicts during this time.**\n\n' : ''}Would you like me to confirm this booking?`,
+      reply: `✅ Everything looks good.\n\n**Room:** ${current.selectedRoomName}\n**Date:** ${current.date}\n**Time:** ${formatTime(current.startTime)} – ${formatTime(current.endTime)}\n**People:** ${current.attendeeCount}\n**TV:** ${current.tvRequired ? 'Yes' : 'No'}\n**Members:** ${current.participants && current.participants.length ? current.participants.join(', ') : 'None'}\n**Email Title:** ${current.subject}\n**Agenda:** ${current.description || 'None'}\n\n${current.forceBooking ? '⚠️ **WARNING: Some teammates have calendar conflicts during this time.**\n\n' : ''}Would you like me to confirm this booking?`,
       session: nextSession,
       showConfirmation: true
     };
@@ -930,8 +1006,8 @@ export const createChatHandler = ({
   nextSession.step = finalStateInfo.step;
   nextSession.expectedField = finalStateInfo.expectedField;
 
-  if (finalStateInfo.action === 'ASK_SUBJECT') return { reply: 'What should the meeting invitation title be? For example: **Sprint planning**.', session: nextSession };
-  if (finalStateInfo.action === 'ASK_DESCRIPTION') return { reply: 'Please provide the meeting description or agenda. Type **none** to leave it blank.', session: nextSession };
+  if (finalStateInfo.action === 'ASK_SUBJECT') return { reply: 'What should the **email title** be? For example: **Sprint planning**.', session: nextSession };
+  if (finalStateInfo.action === 'ASK_DESCRIPTION') return { reply: 'Please provide the meeting agenda. Type **none** to leave it blank.', session: nextSession };
 
   return { reply: 'Please provide the missing details.', session: nextSession };
 };

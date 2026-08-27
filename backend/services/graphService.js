@@ -227,30 +227,9 @@ export const checkTeammatesAvailability = async (
       availabilityViewInterval: 30
     });
 
-  console.log('\n========== GRAPH GET SCHEDULE ==========');
-  console.log(
-    JSON.stringify(response.value, null, 2)
-  );
-  console.log('========================================\n');
-
   const unavailableEmails = [];
 
   for (const item of response.value || []) {
-
-    console.log(
-      '\nChecking schedule for:',
-      item.scheduleId
-    );
-
-    console.log(
-      'availabilityView:',
-      item.availabilityView
-    );
-
-    console.log(
-      'scheduleItems:',
-      item.scheduleItems
-    );
 
     /*
      * Microsoft Graph availabilityView:
@@ -292,30 +271,10 @@ export const checkTeammatesAvailability = async (
     const isUnavailable =
       unavailableFromView || unavailableFromEvents;
 
-    console.log(
-      'Unavailable from availabilityView:',
-      unavailableFromView
-    );
-
-    console.log(
-      'Unavailable from scheduleItems:',
-      unavailableFromEvents
-    );
-
-    console.log(
-      'IS UNAVAILABLE:',
-      isUnavailable
-    );
-
     if (isUnavailable) {
       unavailableEmails.push(item.scheduleId);
     }
   }
-
-  console.log(
-    'FINAL UNAVAILABLE EMAILS:',
-    unavailableEmails
-  );
 
   return unavailableEmails;
 };

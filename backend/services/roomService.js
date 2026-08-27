@@ -10,6 +10,9 @@ import Room from '../models/Room.js';
  * @param {Object} [user]     - req.user ({ department: string, ... })
  */
 export const isRoomAuthorized = (room, user) => {
+  if (room.hasPrivilegeToBookAWeekPrior === true) {
+    return user?.isAdmin === true;
+  }
   if (room.authorizedRoles.includes('Everyone')) return true;
   if (!user?.department) return false;
   return room.authorizedRoles.some(
@@ -48,7 +51,8 @@ export const getChatRooms = async (user) =>
     minBookingHours:   room.minBookingHours,
     maxBookingHours:   room.maxBookingHours,
     authorizedRoles:   room.authorizedRoles,
-    isRestricted:      !(room.authorizedRoles.length === 1 && room.authorizedRoles[0] === 'Everyone'),
+    hasPrivilegeToBookAWeekPrior: room.hasPrivilegeToBookAWeekPrior === true,
+    isRestricted:      room.hasPrivilegeToBookAWeekPrior === true || !(room.authorizedRoles.length === 1 && room.authorizedRoles[0] === 'Everyone'),
     outlookEmail:      room.outlookEmail || null
   }));
 

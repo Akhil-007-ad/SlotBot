@@ -93,6 +93,23 @@ const extractDate = text => {
 
 
   if (
+    /\b(?:in\s+)?(?:the\s+)?next\s+7\s+days\b/.test(lower)
+  ) {
+
+    result.setDate(
+      result.getDate() + 7
+    );
+
+  } else if (
+    /\b(?:after|in)\s+(?:one|1)\s+week\b/.test(lower) ||
+    /\bnext\s+week\b/.test(lower)
+  ) {
+
+    result.setDate(
+      result.getDate() + 7
+    );
+
+  } else if (
     /\bday after tomorrow\b/.test(lower)
   ) {
 
@@ -116,6 +133,22 @@ const extractDate = text => {
 
   } else {
 
+    const nextWeekday = lower.match(
+      /\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/
+    );
+
+    if (nextWeekday) {
+      const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const targetDay = weekdays.indexOf(nextWeekday[1]);
+      const daysAhead = (targetDay - today.getDay() + 7) % 7 || 7;
+      result.setDate(result.getDate() + daysAhead);
+      return [
+        result.getFullYear(),
+        pad(result.getMonth() + 1),
+        pad(result.getDate())
+      ].join('-');
+    }
+
     const numeric =
       lower.match(
         /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
@@ -128,6 +161,25 @@ const extractDate = text => {
         pad(numeric[2]),
         pad(numeric[3])
       ].join('-');
+    }
+
+    const dayFirstNumeric = lower.match(
+      /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/
+    );
+
+    if (dayFirstNumeric) {
+      const day = Number(dayFirstNumeric[1]);
+      const month = Number(dayFirstNumeric[2]);
+      const year = Number(dayFirstNumeric[3]);
+      const parsed = new Date(year, month - 1, day);
+      if (
+        parsed.getFullYear() === year &&
+        parsed.getMonth() === month - 1 &&
+        parsed.getDate() === day
+      ) {
+        return [year, pad(month), pad(day)].join('-');
+      }
+      return undefined;
     }
 
 
@@ -785,7 +837,7 @@ const extractExpectedField = (
   ) {
 
     if (
-      /^(none|no description)$/i
+      /^(none|no description|no agenda)$/i
         .test(text.trim())
     ) {
 
@@ -904,7 +956,7 @@ export const extractBookingDetails = (
 
   if (
     date !== undefined &&
-    /\b(today|tomorrow|day after tomorrow|\d{4}[-/]\d{1,2}[-/]\d{1,2}|january|february|march|april|may|june|july|august|september|october|november|december)\b/i
+    /\b(today|tomorrow|day after tomorrow|(?:in\s+)?(?:the\s+)?next\s+7\s+days|after\s+(?:one|1)\s+week|in\s+(?:one|1)\s+week|next\s+week|next\s+(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|january|february|march|april|may|june|july|august|september|october|november|december)\b/i
       .test(text)
   ) {
 
@@ -916,8 +968,13 @@ export const extractBookingDetails = (
   /*
    * TIMES
    */
+  // Do not interpret the month/day segments of a numeric date as a
+  // time range (for example, 2026-09-02 previously became 09:00-14:00).
+  const textWithoutNumericDates = text
+    .replace(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g, ' ')
+    .replace(/\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b/g, ' ');
   const times =
-    extractTimes(text);
+    extractTimes(textWithoutNumericDates);
 
 
   if (

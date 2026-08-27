@@ -11,6 +11,25 @@ const ConfirmationCard = ({ bookingData, onConfirm, onCancel }) => {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
   };
 
+  const formatDate = value => {
+    if (!value) return 'Not selected';
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime())
+      ? value
+      : parsed.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  };
+
+  const getDuration = () => {
+    if (!startTime || !endTime) return 'Not selected';
+    const [startHour, startMinute] = startTime.split(':').map(Number);
+    const [endHour, endMinute] = endTime.split(':').map(Number);
+    const minutes = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+    if (minutes <= 0) return 'Not selected';
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return [hours ? `${hours} hr${hours === 1 ? '' : 's'}` : '', remainingMinutes ? `${remainingMinutes} min` : ''].filter(Boolean).join(' ');
+  };
+
   return (
     <div className="animate-fade-in flex flex-col gap-4 p-5 rounded-xl bg-white border border-slate-200 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.05),0_2px_4px_-2px_rgba(0,0,0,0.05)] my-3 max-w-[400px]">
       {/* Header */}
@@ -42,28 +61,30 @@ const ConfirmationCard = ({ bookingData, onConfirm, onCancel }) => {
 
         <div className="flex flex-col gap-0.5">
           <span className="text-xs text-slate-500">⏳ Duration</span>
+          <span className="text-sm font-semibold text-slate-900">{getDuration()}</span>
+        </div>
+
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-slate-500">📅 Date</span>
+          <span className="text-sm font-semibold text-slate-900">{formatDate(date)}</span>
+        </div>
+
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-slate-500">🖥 Display</span>
           <span className="text-sm font-semibold text-slate-900">{tvRequired ? 'TV required' : 'No TV required'}</span>
         </div>
 
-        <div className="flex flex-col gap-0.5 col-span-2">
-          <span className="text-xs text-slate-500">📅 Date</span>
-          <span className="text-sm font-semibold text-slate-900">
-            {date || 'Not selected'}
-          </span>
-        </div>
-
-        {participants && participants.length > 0 && (
-          <div className="flex flex-col gap-0.5 col-span-2 border-t border-slate-100 pt-2">
-            <span className="text-xs text-slate-500">👥 Teammates Invited</span>
-            <span className="text-sm font-semibold text-slate-900 break-all">
-              {participants.join(', ')}
-            </span>
-          </div>
-        )}
         <div className="flex flex-col gap-0.5 col-span-2 border-t border-slate-100 pt-2">
-          <span className="text-xs text-slate-500">📝 Invitation</span>
+          <span className="text-xs text-slate-500">👥 Members Invited</span>
+          <span className="text-sm font-semibold text-slate-900 break-all">{participants?.length ? participants.join(', ') : 'None'}</span>
+        </div>
+        <div className="flex flex-col gap-0.5 col-span-2 border-t border-slate-100 pt-2">
+          <span className="text-xs text-slate-500">✉️ Email Title</span>
           <span className="text-sm font-semibold text-slate-900">{subject || 'Not specified'}</span>
-          {description && <span className="text-xs text-slate-600 whitespace-pre-wrap">{description}</span>}
+        </div>
+        <div className="flex flex-col gap-0.5 col-span-2 border-t border-slate-100 pt-2">
+          <span className="text-xs text-slate-500">📝 Agenda</span>
+          <span className="text-sm text-slate-700 whitespace-pre-wrap">{description || 'None'}</span>
         </div>
       </div>
 

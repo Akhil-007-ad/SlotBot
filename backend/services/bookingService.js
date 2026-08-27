@@ -1,10 +1,31 @@
 import Booking from '../models/Booking.js';
+import Room from '../models/Room.js';
 
-export const getTodayBookings = () => {
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const end = new Date(); end.setHours(23, 59, 59, 999);
-  return Booking.find({ status: 'confirmed', startTime: { $gte: start, $lte: end } }).sort({ startTime: 1 });
+const getVisibleRoomFilter = async user => {
+  if (!user || user.isAdmin === true) return {};
+  const privilegedRoomNames = await Room.distinct('name', {
+    hasPrivilegeToBookAWeekPrior: true
+  });
+  return privilegedRoomNames.length
+    ? { roomName: { $nin: privilegedRoomNames } }
+    : {};
 };
+
+export const getBookingsForDay = async (dayOffset = 0, user) => {
+  const start = new Date();
+  start.setDate(start.getDate() + dayOffset);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+  const roomFilter = await getVisibleRoomFilter(user);
+  return Booking.find({
+    ...roomFilter,
+    status: 'confirmed',
+    startTime: { $gte: start, $lte: end }
+  }).sort({ startTime: 1 });
+};
+
+export const getTodayBookings = () => getBookingsForDay(0);
 
 export const findOverlappingBooking = (roomName, startTime, endTime) => Booking.findOne({
   roomName, status: 'confirmed', startTime: { $lt: endTime }, endTime: { $gt: startTime }
@@ -16,6 +37,85 @@ export const createBooking = (details, user) => Booking.create({
 });
 
 export const getBookingById = id => Booking.findById(id);
+
+export const getBookingHistory = async ({ mode, scope, userEmail, userId, page, limit, user }) => {
+  const query = await getVisibleRoomFilter(user);
+  const normalizedEmail = userEmail?.toLowerCase();
+  const escapedEmail = normalizedEmail?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const emailCondition = escapedEmail
+    ? { $regex: `^${escapedEmail}$`, $options: 'i' }
+    : null;
+
+  if (scope === 'today') {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+    query.startTime = { $gte: start, $lte: end };
+  } else if (scope === 'future') {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    query.startTime = { $gte: tomorrow };
+  }
+
+  if (mode === 'bookedBy') {
+    query.$or = [
+      ...(userId ? [{ bookedById: userId }] : []),
+      ...(emailCondition ? [{ bookedByEmail: emailCondition }] : [])
+    ];
+  } else if (mode === 'included') {
+    query.$or = [
+      ...(userId ? [{ bookedById: userId }] : []),
+      ...(emailCondition ? [
+        { bookedByEmail: emailCondition },
+        { teammates: { $elemMatch: emailCondition } }
+      ] : [])
+    ];
+  }
+
+  const [bookings, total] = await Promise.all([
+    Booking.find(query)
+      .sort({ startTime: scope === 'all' ? -1 : 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    Booking.countDocuments(query)
+  ]);
+
+  return {
+    bookings: bookings.map(booking => {
+      const attendees = [booking.bookedByEmail || booking.bookedByName, ...(booking.teammates || [])]
+        .filter(Boolean)
+        .filter((email, index, list) => list.findIndex(item => item.toLowerCase() === email.toLowerCase()) === index);
+      return {
+        id: booking._id,
+        date: booking.date,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        roomName: booking.roomName,
+        organizer: {
+          id: booking.bookedById,
+          name: booking.bookedByName,
+          email: booking.bookedByEmail
+        },
+        peopleCount: booking.peopleCount,
+        attendees,
+        status: booking.status,
+        canCancel: booking.status !== 'cancelled' && Boolean(
+          (booking.bookedById && booking.bookedById === user?.id) ||
+          (booking.bookedByEmail && user?.email && booking.bookedByEmail.toLowerCase() === user.email.toLowerCase())
+        )
+      };
+    }),
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  };
+};
 
 // ─── Local Database Teammate Availability Check ──────────────────────────────
 export const checkDbTeammateAvailability = async (emails, startTime, endTime) => {

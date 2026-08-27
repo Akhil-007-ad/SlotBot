@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import ChatWindow from '../components/chat/ChatWindow'
 import RoomDashboard from '../components/RoomDashboard'
-import { apiRequest } from '../authConfig';
 
-const HomePage = ({account,instance}) => {
-    const API_BASE=import.meta.env.VITE_API_BASE;
+const HomePage = ({account,apiFetch,currentUser}) => {
     const initialSession = {
       step: 'COLLECTING_DETAILS',
       bookingData: {
@@ -28,53 +26,31 @@ const HomePage = ({account,instance}) => {
 
     const [session, setSession] = useState(initialSession);
     const [isTyping, setIsTyping] = useState(false);
-    const [bookings, setBookings] = useState([]);
+    const [bookings, setBookings] = useState({ today: [], tomorrow: [] });
     const [rooms, setRooms] = useState([]);
     const [error, setError] = useState('');
-
-    const apiFetch = useCallback(
-        async (path, options = {}) => {
-            const headers = new Headers(options.headers);
-
-            if (!account) {
-                throw new Error('No Microsoft account is signed in.');
-            }
-
-            const token = await instance.acquireTokenSilent({
-                ...apiRequest,
-                account
-            });
-
-            headers.set(
-                'Authorization',
-                `Bearer ${token.accessToken}`
-            );
-
-            return fetch(`${API_BASE}${path}`, {
-                ...options,
-                headers
-            });
-        },
-        [account, instance]
-    );
 
     /**
      * Load rooms and bookings.
      */
     const loadDashboard = useCallback(async () => {
         try {
-            const [roomsResponse, bookingsResponse] =
+            const [roomsResponse, todayResponse, tomorrowResponse] =
                 await Promise.all([
                     apiFetch('/api/rooms'),
-                    apiFetch('/api/bookings')
+                    apiFetch('/api/bookings?day=today'),
+                    apiFetch('/api/bookings?day=tomorrow')
                 ]);
 
-            if (!roomsResponse.ok || !bookingsResponse.ok) {
+            if (!roomsResponse.ok || !todayResponse.ok || !tomorrowResponse.ok) {
                 throw new Error('Unable to load booking data.');
             }
 
             setRooms(await roomsResponse.json());
-            setBookings(await bookingsResponse.json());
+            setBookings({
+                today: await todayResponse.json(),
+                tomorrow: await tomorrowResponse.json()
+            });
             setError('');
         } catch (loadError) {
             setError(
@@ -129,7 +105,6 @@ const HomePage = ({account,instance}) => {
             });
 
             if (!response.ok) {
-                console.log(response)
                 throw new Error(
                     'The booking assistant could not process that request.'
                 );
@@ -171,6 +146,7 @@ const HomePage = ({account,instance}) => {
 
     return (
         <div>
+            {error && <p className="mx-5 mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
             {/* Main Layout */}
             <main className="flex gap-5 px-5 py-4 flex-1 min-h-0">
 
@@ -188,6 +164,7 @@ const HomePage = ({account,instance}) => {
                             handleSendMessage('cancel')
                         }
                         apiFetch={apiFetch}
+                        isAdmin={currentUser?.isAdmin === true}
                     />
                 </div>
 

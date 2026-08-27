@@ -59,6 +59,10 @@ const roomSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  hasPrivilegeToBookAWeekPrior: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

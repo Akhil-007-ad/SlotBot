@@ -4,11 +4,17 @@ import { BsFillPeopleFill } from "react-icons/bs";
 import { FaClock } from "react-icons/fa6";
 
 import { GoInfo } from "react-icons/go";
+import { useState } from "react";
 
-const RoomDashboard = ({ rooms = [], bookings = [], onRoomSelect }) => {
+const RoomDashboard = ({ rooms = [], bookings = { today: [], tomorrow: [] }, onRoomSelect }) => {
+  const [selectedDay, setSelectedDay] = useState('today');
+  const selectedBookings = bookings[selectedDay] || [];
+  const selectedDate = new Date();
+  if (selectedDay === 'tomorrow') selectedDate.setDate(selectedDate.getDate() + 1);
   const formatTime = value => new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-  const roomBookings = roomName => bookings.filter(booking => booking.roomName.toLowerCase() === roomName.toLowerCase());
+  const roomBookings = roomName => selectedBookings.filter(booking => booking.roomName.toLowerCase() === roomName.toLowerCase());
   const isOccupied = roomName => roomBookings(roomName).some(booking => {
+    if (selectedDay !== 'today') return false;
     const now = Date.now();
     return now >= new Date(booking.startTime).getTime() && now <= new Date(booking.endTime).getTime();
   });
@@ -19,8 +25,21 @@ const RoomDashboard = ({ rooms = [], bookings = [], onRoomSelect }) => {
       <header className="mb-4 shrink-0">
         <h2 className="text-base font-bold text-slate-900">🏢 Room Status Board</h2>
         <p className="text-slate-500 text-[0.85rem] mt-1">
-          Live availability for {new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
+          Room details and bookings for {selectedDate.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
         </p>
+        <div className="mt-3 grid grid-cols-2 rounded-lg bg-slate-100 p-1">
+          {['today', 'tomorrow'].map(day => (
+            <button
+              key={day}
+              type="button"
+              onClick={() => setSelectedDay(day)}
+              className={`rounded-md px-3 py-1.5 text-sm font-semibold capitalize transition-colors ${selectedDay === day ? 'bg-violet-700 text-white shadow-sm' : 'text-slate-600 hover:text-violet-700'}`}
+            >
+              {day}
+              {/* ({(bookings[day] || []).length}) */}
+            </button>
+          ))}
+        </div>
       </header>
 
       {/* Room cards grid */}
@@ -40,9 +59,10 @@ const RoomDashboard = ({ rooms = [], bookings = [], onRoomSelect }) => {
                 <div className="flex flex-col gap-3">
                   <h3 className="text-lg font-bold text-slate-900">{room.name}</h3>
                   <span className="text-[0.8rem] text-slate-500 flex justify-center gap-1 items-center font-semibold"><FaLocationDot size={15}/>{room.floor} · {room.location} ·{room.roomType}</span>
+                  {room.hasPrivilegeToBookAWeekPrior && <span className="w-fit rounded-full bg-violet-100 px-2 py-1 text-[0.7rem] font-bold uppercase tracking-wide text-violet-800">Admin only</span>}
                 </div>
-                <strong className={occupied ? "text-red-700 text-[0.78rem]" : "text-emerald-700 text-[0.78rem]"}>
-                  {occupied ? '● Currently Occupied' : '● Currently Available'}
+                <strong className={occupied ? "text-red-700 text-[0.78rem] shrink-0" : "text-emerald-700 text-[0.78rem] shrink-0"}>
+                  {occupied ? '● Currently Occupied' : selectedDay === 'today' ? '● Currently Available' : '● Available tomorrow'}
                 </strong>
               </div>
 
@@ -65,7 +85,7 @@ const RoomDashboard = ({ rooms = [], bookings = [], onRoomSelect }) => {
                       <b>{formatTime(booking.startTime)} – {formatTime(booking.endTime)} · Slot booked</b>
                     </div>
                   ))
-                  : <div className="bg-blue-50 p-2 rounded-md text-slate-600 font-semibold">No bookings today</div>}
+                  : <div className="bg-blue-50 p-2 rounded-md text-slate-600 font-semibold">No bookings {selectedDay}</div>}
               </div>
 
               <div className="text-xs flex items-center gap-2 p-2 bg-orange-700/10 text-orange-800/80 font-semibold rounded-md">
