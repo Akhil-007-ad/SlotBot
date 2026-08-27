@@ -8,7 +8,12 @@ import React, {
 } from 'react';
 
 import { useMsal } from '@azure/msal-react';
-import { app } from '@microsoft/teams-js';
+
+import {
+  app,
+  authentication,
+} from '@microsoft/teams-js';
+
 import {
   BrowserRouter,
   Navigate,
@@ -16,36 +21,73 @@ import {
   Routes,
 } from 'react-router-dom';
 
-import { apiRequest, loginRequest } from './authConfig';
+import {
+  loginRequest,
+  apiRequest,
+} from './authConfig';
+
 import NavBar from './components/NavBar';
 import Loading from './components/Loading';
 import PageLoading from './components/PageLoading';
 
-const HomePage = lazy(() => import('./pages/HomePage'));
-const HistoryPage = lazy(() => import('./pages/HistoryPage'));
-const AdminPage = lazy(() => import('./pages/AdminPage'));
+const HomePage = lazy(
+  () => import('./pages/HomePage')
+);
 
-const configuredApiBase = import.meta.env.VITE_API_BASE;
+const HistoryPage = lazy(
+  () => import('./pages/HistoryPage')
+);
+
+const AdminPage = lazy(
+  () => import('./pages/AdminPage')
+);
+
+
+const configuredApiBase =
+  import.meta.env.VITE_API_BASE;
 
 const API_BASE =
-  configuredApiBase?.replace(/\/$/, '') || 'http://localhost:5001';
+  configuredApiBase?.replace(/\/$/, '') ||
+  'http://localhost:5001';
 
 
 const App = () => {
   const { instance, accounts } = useMsal();
 
-  const [currentUser, setCurrentUser] = useState(null);
-  const [profileLoading, setProfileLoading] = useState(false);
+  const [isInTeams, setIsInTeams] =
+    useState(false);
 
-  const [isInTeams, setIsInTeams] = useState(false);
-  const [teamsLoading, setTeamsLoading] = useState(true);
+  const [teamsReady, setTeamsReady] =
+    useState(false);
 
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState(null);
+  const [currentUser, setCurrentUser] =
+    useState(null);
+
+  const [profileLoading, setProfileLoading] =
+    useState(false);
+
+  const [loginLoading, setLoginLoading] =
+    useState(false);
+
+  const [loginError, setLoginError] =
+    useState(null);
 
 
   /*
-   * Detect whether SlotBot is running inside Microsoft Teams.
+   * Current signed-in Microsoft account.
+   */
+  const account = useMemo(() => {
+    return (
+      instance.getActiveAccount() ||
+      accounts[0] ||
+      null
+    );
+  }, [accounts, instance]);
+
+
+  /*
+   * Detect whether SlotBot is running
+   * inside Microsoft Teams.
    */
   useEffect(() => {
     const initializeTeams = async () => {
@@ -54,13 +96,17 @@ const App = () => {
 
         setIsInTeams(true);
 
-        console.log('SlotBot is running inside Microsoft Teams');
+        console.log(
+          'SlotBot is running inside Microsoft Teams.'
+        );
       } catch {
         setIsInTeams(false);
 
-        console.log('SlotBot is running in a normal browser');
+        console.log(
+          'SlotBot is running in a normal browser.'
+        );
       } finally {
-        setTeamsLoading(false);
+        setTeamsReady(true);
       }
     };
 
@@ -69,34 +115,81 @@ const App = () => {
 
 
   /*
-   * Get the currently signed-in Microsoft account.
-   */
-  const account = useMemo(() => {
-    return accounts[0] || null;
-  }, [accounts]);
-
-
-  /*
-   * Login flow.
-   *
-   * Normal browser:
-   *   loginRedirect()
-   *
-   * Microsoft Teams:
-   *   loginPopup()
+   * Handle Microsoft login.
    */
   const handleLogin = async () => {
     try {
       setLoginLoading(true);
       setLoginError(null);
 
-      if (isInTeams) {
-        await instance.loginPopup(loginRequest);
-      } else {
-        await instance.loginRedirect(loginRequest);
+      /*
+       * Normal browser login.
+       */
+      if (!isInTeams) {
+        await instance.loginRedirect(
+          loginRequest
+        );
+
+        return;
       }
+
+
+      /*
+       * Microsoft Teams login.
+       *
+       * Save a flag before opening the popup.
+       *
+       * We do this because Microsoft Entra will
+       * redirect back to the existing root URI:
+       *
+       * https://slot-bot-xi.vercel.app
+       *
+       * and we do not want to add another
+       * redirect URI.
+       */
+      localStorage.setItem(
+        'slotbot_teams_auth_in_progress',
+        'true'
+      );
+
+
+      /*
+       * Teams opens a managed authentication popup.
+       */
+      const result =
+        await authentication.authenticate({
+          url:
+            `${window.location.origin}` +
+            '?teamsAuth=true',
+
+          width: 600,
+          height: 535,
+        });
+
+      console.log(
+        'Teams authentication completed:',
+        result
+      );
+
+
+      /*
+       * Authentication completed.
+       *
+       * Reload the main Teams tab so MSAL
+       * initializes again and reads the
+       * authenticated account.
+       */
+      window.location.reload();
+
     } catch (error) {
-      console.error('Microsoft login failed:', error);
+      console.error(
+        'Microsoft login failed:',
+        error
+      );
+
+      localStorage.removeItem(
+        'slotbot_teams_auth_in_progress'
+      );
 
       setLoginError(
         error?.message ||
@@ -109,42 +202,50 @@ const App = () => {
 
 
   /*
-   * Authenticated API request helper.
+   * Authenticated backend API helper.
    */
   const apiFetch = useCallback(
     async (path, options = {}) => {
       if (!account) {
-        throw new Error('No Microsoft account is signed in.');
+        throw new Error(
+          'No Microsoft account is signed in.'
+        );
       }
 
-      const tokenResponse = await instance.acquireTokenSilent({
-        ...apiRequest,
-        account,
-      });
+      const tokenResponse =
+        await instance.acquireTokenSilent({
+          ...apiRequest,
+          account,
+        });
 
-      const headers = new Headers(options.headers);
+      const headers =
+        new Headers(options.headers);
 
       headers.set(
         'Authorization',
         `Bearer ${tokenResponse.accessToken}`
       );
 
-      return fetch(`${API_BASE}${path}`, {
-        ...options,
-        headers,
-      });
+      return fetch(
+        `${API_BASE}${path}`,
+        {
+          ...options,
+          headers,
+        }
+      );
     },
     [account, instance]
   );
 
 
   /*
-   * Load the current SlotBot user profile.
+   * Load the SlotBot user profile.
    */
   useEffect(() => {
     if (!account) {
       setCurrentUser(null);
       setProfileLoading(false);
+
       return;
     }
 
@@ -152,7 +253,8 @@ const App = () => {
       try {
         setProfileLoading(true);
 
-        const response = await apiFetch('/api/users/me');
+        const response =
+          await apiFetch('/api/users/me');
 
         if (!response.ok) {
           throw new Error(
@@ -160,9 +262,11 @@ const App = () => {
           );
         }
 
-        const user = await response.json();
+        const user =
+          await response.json();
 
         setCurrentUser(user);
+
       } catch (error) {
         console.error(
           'Unable to load SlotBot profile:',
@@ -178,19 +282,20 @@ const App = () => {
 
 
   /*
-   * Wait until we know whether we are running in Teams.
+   * Wait until Teams detection finishes.
    */
-  if (teamsLoading) {
+  if (!teamsReady) {
     return <Loading />;
   }
 
 
   /*
-   * User is not authenticated.
+   * User is not signed in.
    */
   if (!account) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
+
         <h1 className="text-3xl font-bold text-violet-900">
           SlotBot
         </h1>
@@ -215,13 +320,15 @@ const App = () => {
             ? 'Signing in...'
             : 'Sign in with Microsoft'}
         </button>
+
       </main>
     );
   }
 
 
   /*
-   * User is authenticated, but profile is loading.
+   * User is signed in but profile
+   * information is still loading.
    */
   if (profileLoading) {
     return <Loading />;
@@ -229,11 +336,12 @@ const App = () => {
 
 
   /*
-   * Main authenticated application.
+   * Main authenticated SlotBot application.
    */
   return (
     <BrowserRouter>
       <div className="flex min-h-screen flex-col bg-slate-50 font-[Plus_Jakarta_Sans,sans-serif]">
+
         <NavBar
           account={account}
           instance={instance}
@@ -241,7 +349,9 @@ const App = () => {
         />
 
         <Suspense fallback={<PageLoading />}>
+
           <Routes>
+
             <Route
               path="/"
               element={
@@ -266,23 +376,39 @@ const App = () => {
             <Route
               path="/admin"
               element={
-                currentUser?.isAdmin ? (
-                  <AdminPage apiFetch={apiFetch} />
-                ) : (
-                  <Navigate to="/" replace />
-                )
+                currentUser?.isAdmin
+                  ? (
+                    <AdminPage
+                      apiFetch={apiFetch}
+                    />
+                  )
+                  : (
+                    <Navigate
+                      to="/"
+                      replace
+                    />
+                  )
               }
             />
 
             <Route
               path="*"
-              element={<Navigate to="/" replace />}
+              element={
+                <Navigate
+                  to="/"
+                  replace
+                />
+              }
             />
+
           </Routes>
+
         </Suspense>
+
       </div>
     </BrowserRouter>
   );
 };
+
 
 export default App;

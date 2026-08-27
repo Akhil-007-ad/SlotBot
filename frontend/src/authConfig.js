@@ -28,7 +28,7 @@ export const msalInstance = authReady
         },
 
         cache: {
-            cacheLocation: 'sessionStorage',
+            cacheLocation: 'localStorage',
             storeAuthStateInCookie: false
         }
     })
