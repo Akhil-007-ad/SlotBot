@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import ChatWindow from '../components/chat/ChatWindow'
 import RoomDashboard from '../components/RoomDashboard'
+import Loading from '../components/Loading';
 
 const HomePage = ({account,apiFetch,currentUser}) => {
     const initialSession = {
@@ -30,11 +31,14 @@ const HomePage = ({account,apiFetch,currentUser}) => {
     const [rooms, setRooms] = useState([]);
     const [error, setError] = useState('');
 
+    const [roomsLoading,setRoomsLoading]=useState(false)
+
     /**
      * Load rooms and bookings.
      */
     const loadDashboard = useCallback(async () => {
         try {
+            setRoomsLoading(true)
             const [roomsResponse, todayResponse, tomorrowResponse] =
                 await Promise.all([
                     apiFetch('/api/rooms'),
@@ -57,6 +61,9 @@ const HomePage = ({account,apiFetch,currentUser}) => {
                 loadError.message ||
                 'Unable to load SlotBot data.'
             );
+        }
+        finally{
+            setRoomsLoading(false)
         }
     }, [apiFetch]);
 
@@ -143,6 +150,12 @@ const HomePage = ({account,apiFetch,currentUser}) => {
             setIsTyping(false);
         }
     };
+
+    if(roomsLoading){
+        return(
+            <Loading/>
+        )
+    }
 
     return (
         <div>

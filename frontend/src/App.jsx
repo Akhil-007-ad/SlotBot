@@ -4,6 +4,8 @@ import { loginRequest, apiRequest } from './authConfig';
 import NavBar from './components/NavBar';
 
 import {Navigate, Route, Routes, BrowserRouter} from 'react-router-dom'
+import Loading from './components/Loading';
+import PageLoading from './components/PageLoading';
 const HomePage = lazy(() => import('./pages/HomePage'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
@@ -67,19 +69,23 @@ const App = () => {
     );
   }
 
+  if(profileLoading){
+    return(<Loading/>)
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 font-[Plus_Jakarta_Sans,sans-serif]">
       <BrowserRouter>
         <NavBar account={account} instance={instance} isAdmin={currentUser?.isAdmin}/>
 
         
-          <Suspense fallback={<PageLoading/>}>
+          {/* <Suspense fallback={<PageLoading/>}> */}
             <Routes>
               <Route path='/' element={<HomePage account={account} apiFetch={apiFetch} currentUser={currentUser}/>}/>
               <Route path='/history' element={<HistoryPage apiFetch={apiFetch} currentUser={currentUser}/>}/>
-              <Route path='/admin' element={profileLoading ? <PageLoading/> : currentUser?.isAdmin ? <AdminPage apiFetch={apiFetch}/> : <Navigate to='/' replace/>}/>
+              <Route path='/admin' element={currentUser?.isAdmin ? <AdminPage apiFetch={apiFetch}/> : <Navigate to='/' replace/>}/>
             </Routes>
-          </Suspense>
+          {/* </Suspense> */}
       
       </BrowserRouter>
 
@@ -88,8 +94,5 @@ const App = () => {
   );
 };
 
-const PageLoading = () => (
-  <main className="flex flex-1 items-center justify-center text-slate-500">Loading…</main>
-);
 
 export default App;
