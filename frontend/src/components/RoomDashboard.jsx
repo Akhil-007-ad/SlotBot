@@ -6,7 +6,7 @@ import { FaClock } from "react-icons/fa6";
 import { GoInfo } from "react-icons/go";
 import { useState } from "react";
 
-const RoomDashboard = ({ rooms = [], bookings = { today: [], tomorrow: [] }, onRoomSelect }) => {
+const RoomDashboard = ({ rooms = [], bookings = { today: [], tomorrow: [] }, onRoomSelect, loading }) => {
   const [selectedDay, setSelectedDay] = useState('today');
   const selectedBookings = bookings[selectedDay] || [];
   const selectedDate = new Date();
@@ -19,6 +19,11 @@ const RoomDashboard = ({ rooms = [], bookings = { today: [], tomorrow: [] }, onR
     return now >= new Date(booking.startTime).getTime() && now <= new Date(booking.endTime).getTime();
   });
 
+  if(loading){
+    return(
+      <div className="flex flex-1 items-center justify-center text-slate-500">Loading…</div>
+    )
+  }
   return (
     <section className="flex flex-col h-[calc(100vh-110px)] border-2 border-slate-200/70 rounded-2xl p-3">
       {/* Header */}

@@ -151,12 +151,6 @@ const HomePage = ({account,apiFetch,currentUser}) => {
         }
     };
 
-    if(roomsLoading){
-        return(
-            <Loading/>
-        )
-    }
-
     return (
         <div>
             {error && <p className="mx-5 mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
@@ -186,6 +180,8 @@ const HomePage = ({account,apiFetch,currentUser}) => {
                     <RoomDashboard
                         rooms={rooms}
                         bookings={bookings}
+                        loading={roomsLoading}
+                        onRefresh={loadDashboard}
                         onRoomSelect={(roomName) =>
                             handleSendMessage(
                                 `Book room ${roomName}`
