@@ -297,7 +297,7 @@ const App = () => {
           isAdmin={currentUser?.isAdmin}
         />
 
-        <Suspense fallback={<PageLoading />}>
+        {/* <Suspense fallback={<PageLoading />}> */}
 
           <Routes>
 
@@ -352,7 +352,7 @@ const App = () => {
 
           </Routes>
 
-        </Suspense>
+        {/* </Suspense> */}
 
       </div>
     </BrowserRouter>

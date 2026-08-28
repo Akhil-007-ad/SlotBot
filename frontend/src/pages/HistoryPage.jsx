@@ -67,10 +67,6 @@ const HistoryPage = ({ apiFetch, currentUser }) => {
     setView(nextView);
     setPage(1);
   };
-  if(loading){
-    return(<Loading/>)
-  }
-
 
   return (
     <main className="flex-1 p-5">
@@ -116,7 +112,10 @@ const HistoryPage = ({ apiFetch, currentUser }) => {
         {['today', 'future'].includes(view) && !loading && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {data.bookings.map(booking => <MeetingCard key={booking.id} booking={booking} currentTime={currentTime} showDate={view === 'future'} onCancel={cancelBooking} cancelling={cancellingId === booking.id}/>) }
         </div>}
-        {loading && <p className="py-10 text-center text-slate-500">Loading history…</p>}
+        {loading && (<div className="flex items-center justify-center py-10 gap-2">
+          <div className='border-violet-600 border-2 rounded-full w-5 h-5 border-b-white animate-spin'></div>
+          <p className="py-10 text-center text-slate-500">Loading history…</p>
+          </div>)}
         {!loading && !data.bookings.length && !error && <p className="py-10 text-center text-slate-500">No bookings found.</p>}
         {view === 'overall' && <div className="mt-5 flex items-center justify-between text-sm text-slate-600">
           <span>{data.pagination.total || 0} booking(s)</span>

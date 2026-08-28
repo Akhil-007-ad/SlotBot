@@ -19,11 +19,6 @@ const RoomDashboard = ({ rooms = [], bookings = { today: [], tomorrow: [] }, onR
     return now >= new Date(booking.startTime).getTime() && now <= new Date(booking.endTime).getTime();
   });
 
-  if(loading){
-    return(
-      <div className="flex flex-1 items-center justify-center text-slate-500">Loading…</div>
-    )
-  }
   return (
     <section className="flex flex-col h-[calc(100vh-110px)] border-2 border-slate-200/70 rounded-2xl p-3">
       {/* Header */}
@@ -41,12 +36,15 @@ const RoomDashboard = ({ rooms = [], bookings = { today: [], tomorrow: [] }, onR
               className={`rounded-md px-3 py-1.5 text-sm font-semibold capitalize transition-colors ${selectedDay === day ? 'bg-violet-700 text-white shadow-sm' : 'text-slate-600 hover:text-violet-700'}`}
             >
               {day}
-              {/* ({(bookings[day] || []).length}) */}
             </button>
           ))}
         </div>
       </header>
-
+      {loading && <div className="flex-1 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-700"></div>
+        <p className="text-slate-500 ml-2">Refreshing rooms…</p>
+      </div>}
+      {!loading && !rooms.length && <div className="flex-1 flex items-center justify-center"><p className="text-slate-500">No rooms available.</p></div>}
       {/* Room cards grid */}
       <div className="flex flex-col gap-3 overflow-y-auto pr-1">
         {rooms.map(room => {

@@ -11,6 +11,7 @@ const AdminPage = ({ apiFetch }) => {
   const [sort, setSort] = useState({ key: 'organizerCount', direction: 'desc' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [reportLoading,setReportLoading]=useState(false)
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -55,6 +56,7 @@ const AdminPage = ({ apiFetch }) => {
   };
 
   const loadReport = useCallback(async () => {
+    setReportLoading(true);
     const [year, selectedMonth] = month.split('-');
     try {
       const response = await apiFetch(`/api/admin/reports/monthly?month=${Number(selectedMonth)}&year=${year}`);
@@ -63,6 +65,7 @@ const AdminPage = ({ apiFetch }) => {
       setReport(data);
       setError('');
     } catch (loadError) { setError(loadError.message); }
+    finally { setReportLoading(false); }
   }, [apiFetch, month]);
 
   useEffect(() => { if (view === 'report') loadReport(); }, [view, loadReport]);
@@ -118,10 +121,27 @@ const AdminPage = ({ apiFetch }) => {
           </div>
           <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500"><tr>
-                <SortableHeader label="User" sortKey="name" onSort={changeSort}/><SortableHeader label="Email" sortKey="email" onSort={changeSort}/><SortableHeader label="Booked" sortKey="organizerCount" onSort={changeSort}/><SortableHeader label="Included" sortKey="includedCount" onSort={changeSort}/>
-              </tr></thead>
-              <tbody className="divide-y divide-slate-100">{sortedUsers.map(user => <tr key={user.id}><td className="px-4 py-3 font-medium">{user.name}</td><td className="px-4 py-3 text-slate-500">{user.email || '—'}</td><td className="px-4 py-3">{user.organizerCount}</td><td className="px-4 py-3">{user.includedCount}</td></tr>)}</tbody>
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <SortableHeader label="User" sortKey="name" onSort={changeSort}/>
+                  <SortableHeader label="Email" sortKey="email" onSort={changeSort}/>
+                  <SortableHeader label="Booked" sortKey="organizerCount" onSort={changeSort}/>
+                  <SortableHeader label="Included" sortKey="includedCount" onSort={changeSort}/>
+                </tr>
+              </thead>
+              {reportLoading ? <tbody><tr><td colSpan={4} className="py-8 text-center text-slate-500">Loading report…</td></tr></tbody> : null}
+              {!reportLoading && !report?.users?.length ? <tbody><tr><td colSpan={4} className="py-8 text-center text-slate-500">No data available for this month.</td></tr></tbody> : null}
+              {!reportLoading && report?.users?.length ?
+              <tbody className="divide-y divide-slate-100">
+                {sortedUsers.map(user => 
+                  <tr key={user.id}>
+                    <td className="px-4 py-3 font-medium">{user.name}</td>
+                    <td className="px-4 py-3 text-slate-500">{user.email || '—'}</td>
+                    <td className="px-4 py-3">{user.organizerCount}</td>
+                    <td className="px-4 py-3">{user.includedCount}</td>
+                  </tr>)}
+              </tbody>
+              : null}
             </table>
           </div>
         </>}

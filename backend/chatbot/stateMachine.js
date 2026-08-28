@@ -1,39 +1,9 @@
 import {
   getMissingSearchField
 } from './bookingSession.js';
-
-export function debugSession(session, label = '') {
-    console.log('\n========================================');
-    console.log(`SLOTBOT DEBUG ${label}`);
-    console.log('========================================');
-
-    console.log('STEP:', session?.step);
-    console.log('EXPECTED FIELD:', session?.expectedField);
-
-    console.log(
-        'SESSION:',
-        JSON.stringify(session, null, 2)
-    );
-
-    console.log('========================================\n');
-}
-export function changeState(session, newStep, reason = '') {
-    const oldStep = session.step;
-
-    console.log('\n[STEP CHANGE]');
-    console.log('FROM   :', oldStep);
-    console.log('TO     :', newStep);
-    console.log('REASON :', reason);
-    console.log('');
-
-    session.step = newStep;
-}
 /* ============================================================
    STATES
 ============================================================ */
-
-
-
 export const STATES = Object.freeze({
 
   COLLECTING_DETAILS:
